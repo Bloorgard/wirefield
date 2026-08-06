@@ -280,6 +280,16 @@ async function main() {
       pass('release physics', `${release.unique} geometries after drag release`);
     } catch (error) { fail('release physics', error); }
 
+    try {
+      await setViewport(390, 844, true);
+      await reset();
+      await evaluate(`localStorage.setItem('wires-v2',JSON.stringify({version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:7,y:2,length:10,color:'#102cff'},{id:'0002',x:12,y:4,endX:14,endY:4,length:10,color:'#102cff'},{id:'0003',x:16,y:1,length:11,color:'#102cff'}]}));localStorage.setItem('wires-view-v1',JSON.stringify({x:0,y:0,zoom:1}));location.reload()`);
+      await sleep(400);
+      const pinCollision = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),tail=document.querySelector('.wire-group[data-id="0002"] .wire-tail-hit'),r=scene.getBoundingClientRect(),startX=r.left+14.5*44,startY=r.top+4.5*44,targetX=r.left+7.5*44,targetY=r.top+2.5*44,send=(type,id,cx,cy)=>scene.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:id,pointerType:'touch',button:type==='pointerdown'?0:0,buttons:type==='pointerdown'?1:0,clientX:cx,clientY:cy}));tail.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:210,pointerType:'touch',button:0,buttons:1,clientX:startX,clientY:startY}));tail.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:210,pointerType:'touch',button:0,buttons:0,clientX:startX,clientY:startY}));tail.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:211,pointerType:'touch',button:0,buttons:1,clientX:startX,clientY:startY}));scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:211,pointerType:'touch',button:0,buttons:1,clientX:targetX,clientY:targetY}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:211,pointerType:'touch',button:0,buttons:0,clientX:targetX,clientY:targetY}));await new Promise(resolve=>setTimeout(resolve,80));const w=JSON.parse(localStorage.getItem('wires-v2')).wires,tailWire=w.find(v=>v.id==='0002'),pins=w.filter(v=>v.id!=='0002').flatMap(v=>[[v.x,v.y],...(Number.isFinite(v.endX)?[[v.endX,v.endY]]:[])]);return {tail:[tailWire.endX,tailWire.endY],blocked:tailWire.endX!==7||tailWire.endY!==2,unique:!pins.some(([x,y])=>x===tailWire.endX&&y===tailWire.endY)}})()`);
+      assert(pinCollision.blocked && pinCollision.unique, `tail landed on a foreign pin: ${pinCollision.tail}`);
+      pass('pin collision', `tail redirected to ${pinCollision.tail.join(',')}`);
+    } catch (error) { fail('pin collision', error); }
+
     const errors = await evaluate('[]');
     await evaluate("localStorage.clear(); location.reload();");
     const failed = results.filter(result => result.error);
