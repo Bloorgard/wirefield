@@ -229,6 +229,15 @@ async function main() {
     try {
       await setViewport(1280, 800, false);
       await reset();
+      const commandPoints = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),hitA=document.querySelector('.wire-group[data-id="0001"] .wire-hit'),hitB=document.querySelector('.wire-group[data-id="0003"] .wire-hit'),r=scene.getBoundingClientRect(),ax=r.left+330,ay=r.top+110,bx=r.left+726,by=r.top+66;hitA.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:230,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:ax,clientY:ay}));hitB.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:231,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:bx,clientY:by}));const selected={a:document.querySelector('.wire-group[data-id="0001"] .wire-dot').classList.contains('point-selected'),b:document.querySelector('.wire-group[data-id="0003"] .wire-dot').classList.contains('point-selected')};const dot= document.querySelector('.wire-group[data-id="0003"] .wire-dot');dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:1,clientX:bx,clientY:by}));scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:1,clientX:bx+44,clientY:by}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:0,clientX:bx+44,clientY:by}));await new Promise(resolve=>setTimeout(resolve,100));const wires=JSON.parse(localStorage.getItem('wires-v2')).wires;return {selected,moved:wires.find(w=>w.id==='0001').x===8&&wires.find(w=>w.id==='0003').x===17}})()`);
+      assert(commandPoints.selected.a && commandPoints.selected.b, 'Command click did not add both point selections');
+      assert(commandPoints.moved, 'Command-selected points did not move together');
+      pass('Command point selection', 'Mac modifier selects and drags multiple points');
+    } catch (error) { fail('Command point selection', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
       const groupedLayers = await evaluate(`(()=>{const select=(id,shift=false)=>document.querySelector('.item[data-id="'+id+'"] .item-main').dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:shift}));select('0001');select('0002',true);window.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,code:'BracketRight',key:']',ctrlKey:true}));const state=JSON.parse(localStorage.getItem('wires-v2'));return {selected:[...document.querySelectorAll('.item.active')].map(row=>row.dataset.id),order:state.wires.map(w=>w.id)}})()`);
       assert(groupedLayers.selected.length === 2, `expected 2 selected layers, got ${groupedLayers.selected.length}`);
       assert(groupedLayers.order.join(',') === '0003,0001,0002', `selected layers reordered as ${groupedLayers.order.join(',')}`);
