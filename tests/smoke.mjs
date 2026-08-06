@@ -97,7 +97,7 @@ async function main() {
     await setViewport(1280, 800, false);
     await navigate();
     try {
-      const result = await evaluate(`(()=>({groups:document.querySelectorAll('.wire-group').length,rendered:[...document.querySelectorAll('.wire-body')].every(e=>Boolean(e.getAttribute('d'))),ids:[...document.querySelectorAll('.wire-group')].map(e=>e.dataset.id),collisionButton:Boolean(document.querySelector('#collisionToggle')),collisionOff:document.querySelector('#collisionToggle')?.getAttribute('aria-pressed')==='false'}))()`);
+      const result = await evaluate(`(()=>({groups:document.querySelectorAll('.wire-group').length,rendered:[...document.querySelectorAll('.wire-body')].every(e=>Boolean(e.getAttribute('d'))),ids:[...document.querySelectorAll('.wire-group')].map(e=>e.dataset.id),wireLabel:document.querySelector('#wireCountLabel')?.textContent,layersLabel:document.querySelector('#layersToggle')?.textContent,collisionButton:Boolean(document.querySelector('#collisionToggle')),collisionOff:document.querySelector('#collisionToggle')?.getAttribute('aria-pressed')==='false'}))()`);
       assert(result.groups === 3, `expected 3 groups, got ${result.groups}`);
       assert(result.rendered, 'one or more SVG paths has no d attribute');
       assert(result.ids.join(',') === '0001,0002,0003', `unexpected IDs ${result.ids.join(',')}`);
@@ -119,7 +119,7 @@ async function main() {
     try {
       await evaluate("document.querySelector('#addBtn').click()");
       assert((await state()).wires.length === 4, 'add did not create a fourth wire');
-      await evaluate("document.querySelector('#deleteBtn').click()");
+      await evaluate("document.querySelector('.item.primary .layer-tools .trash').click()");
       assert((await state()).wires.length === 3, 'delete did not restore three wires');
       pass('add and delete');
     } catch (error) { fail('add and delete', error); }
@@ -164,11 +164,11 @@ async function main() {
     try {
       await setViewport(390, 844, true);
       await reset();
-      const collapsed = await evaluate(`(()=>{const side=document.querySelector('.side'),button=document.querySelector('#layersToggle'),list=document.querySelector('#list'),quick=document.querySelector('#compactLayerControls'),range=quick?.querySelector('input'),swatches=quick?.querySelectorAll('.swatch');return {height:parseFloat(getComputedStyle(side).height),button:getComputedStyle(button).display,list:getComputedStyle(list).display,quick:getComputedStyle(quick).display,range:Boolean(range),swatches:swatches?.length||0,toolDirection:getComputedStyle(document.querySelector('.tool-controls')).flexDirection,actionDirection:getComputedStyle(document.querySelector('.top-actions')).flexDirection}})()`);
+      const collapsed = await evaluate(`(()=>{const side=document.querySelector('.side'),button=document.querySelector('#layersToggle'),list=document.querySelector('#list'),quick=document.querySelector('#compactLayerControls'),legacy=document.querySelector('#inspector');return {height:parseFloat(getComputedStyle(side).height),button:getComputedStyle(button).display,list:getComputedStyle(list).display,quick:Boolean(quick),legacy:Boolean(legacy),toolDirection:getComputedStyle(document.querySelector('.tool-controls')).flexDirection,actionDirection:getComputedStyle(document.querySelector('.top-actions')).flexDirection}})()`);
       assert(collapsed.height >= 145 && collapsed.height <= 170, `collapsed panel is ${collapsed.height}px`);
       assert(collapsed.button !== 'none', 'mobile layers button is hidden');
       assert(collapsed.list === 'none', 'mobile layer list is open by default');
-      assert(collapsed.quick === 'block' && collapsed.range && collapsed.swatches === 6, 'compact layer controls are incomplete');
+      assert(!collapsed.quick && !collapsed.legacy, 'legacy selected-wire block is still present');
       assert(collapsed.toolDirection === 'column' && collapsed.actionDirection === 'column', 'mobile top menus are not stacked');
       const expanded = await evaluate(`(()=>{const b=document.querySelector('#layersToggle');b.click();const list=document.querySelector('#list'),side=document.querySelector('.side'),sr=side.getBoundingClientRect(),lr=list.getBoundingClientRect();return {open:side.classList.contains('layers-open'),list:getComputedStyle(list).display,fullWidth:lr.width>sr.width-30}})()`);
       assert(expanded.open && expanded.list === 'block' && expanded.fullWidth, 'mobile layer panel did not open full width');
