@@ -230,9 +230,10 @@ async function main() {
     try {
       await setViewport(390, 844, true);
       await reset();
-      const gravity = await evaluate(`(async()=>{if(!('DeviceMotionEvent' in window))window.DeviceMotionEvent=function(){};if(!('DeviceOrientationEvent' in window))window.DeviceOrientationEvent=function(){};const button=document.querySelector('#gravityToggle'),before=document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');button.click();await new Promise(resolve=>setTimeout(resolve,40));const event=new Event('devicemotion');Object.defineProperty(event,'accelerationIncludingGravity',{value:{x:9.81,y:0,z:0}});window.dispatchEvent(event);await new Promise(resolve=>setTimeout(resolve,180));return {pressed:button.getAttribute('aria-pressed'),changed:before!==document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d')}})()`);
+      const gravity = await evaluate(`(async()=>{if(!('DeviceMotionEvent' in window))window.DeviceMotionEvent=function(){};if(!('DeviceOrientationEvent' in window))window.DeviceOrientationEvent=function(){};const button=document.querySelector('#gravityToggle'),before=document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');button.click();await new Promise(resolve=>setTimeout(resolve,300));const event=new Event('devicemotion');Object.defineProperty(event,'accelerationIncludingGravity',{value:{x:9.81,y:0,z:0}});window.dispatchEvent(event);await new Promise(resolve=>setTimeout(resolve,180));const changed=before!==document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');const onPressed=button.getAttribute('aria-pressed');button.click();await new Promise(resolve=>setTimeout(resolve,40));const offPressed=button.getAttribute('aria-pressed');window.dispatchEvent(event);await new Promise(resolve=>setTimeout(resolve,80));return {pressed:onPressed,changed,offPressed}})()`);
       assert(gravity.pressed === 'true', 'gravity toggle did not activate');
       assert(gravity.changed, 'device motion did not wake wire physics');
+      assert(gravity.offPressed === 'false', 'gravity toggle did not deactivate');
       pass('device gravity', 'motion sample changed the wire vector');
     } catch (error) { fail('device gravity', error); }
 
