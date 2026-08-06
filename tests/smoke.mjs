@@ -311,6 +311,16 @@ async function main() {
       pass('wire-to-pin collision', 'body deflected around a foreign pin');
     } catch (error) { fail('wire-to-pin collision', error); }
 
+    try {
+      await setViewport(390, 844, true);
+      await reset();
+      await evaluate(`localStorage.setItem('wires-v2',JSON.stringify({version:1,cell:44,background:'#ffffff',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:3,y:2,length:8,color:'#102cff'},{id:'0002',x:4,y:2,length:8,color:'#00d99b'},{id:'0003',x:5,y:2,length:8,color:'#f200e9'},{id:'0004',x:6,y:2,length:8,color:'#ffc642'},{id:'0005',x:7,y:2,length:8,color:'#102cff'}]}));localStorage.setItem('wires-view-v1',JSON.stringify({x:0,y:0,zoom:1}));location.reload()`);
+      await sleep(1000);
+      const crowded = await evaluate(`(()=>{let maxDrift=0;for(const w of JSON.parse(localStorage.getItem('wires-v2')).wires){const d=document.querySelector('.wire-group[data-id="'+w.id+'"] .wire-body')?.getAttribute('d')||'',n=[...d.matchAll(/-?\\d+(?:\\.\\d+)?/g)].map(m=>Number(m[0])),xs=n.filter((_,i)=>i%2===0),expected=(w.x+.5)*44;for(const x of xs)maxDrift=Math.max(maxDrift,Math.abs(x-expected))}return {maxDrift}})()`);
+      assert(crowded.maxDrift < 2.5, `adjacent pins caused ${crowded.maxDrift.toFixed(2)}px lateral drift`);
+      pass('adjacent pin stability', `${crowded.maxDrift.toFixed(2)}px maximum lateral drift`);
+    } catch (error) { fail('adjacent pin stability', error); }
+
     const errors = await evaluate('[]');
     await evaluate("localStorage.clear(); location.reload();");
     const failed = results.filter(result => result.error);
