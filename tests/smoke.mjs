@@ -215,14 +215,24 @@ async function main() {
     try {
       await setViewport(1280, 800, false);
       await reset();
-      const nativeZoom = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),before=Number(document.querySelector('#zoom').value);scene.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-120,clientX:r.width/2,clientY:r.height/2}));await new Promise(resolve=>setTimeout(resolve,40));return {before,after:Number(document.querySelector('#zoom').value),min:document.querySelector('#zoom').min,fileMenu:Boolean(document.querySelector('.file-menu')),legacyActions:document.querySelectorAll('.top-actions > button').length,layerIcons:document.querySelectorAll('.item.primary .layer-tools .icon').length,lengthIcons:document.querySelectorAll('.item.primary .length-control .icon').length}})()`);
+      const nativeZoom = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),before=Number(document.querySelector('#zoom').value);scene.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-120,clientX:r.width/2,clientY:r.height/2}));await new Promise(resolve=>setTimeout(resolve,40));return {before,after:Number(document.querySelector('#zoom').value),min:document.querySelector('#zoom').min,fileMenu:Boolean(document.querySelector('.file-menu')),legacyActions:document.querySelectorAll('.top-actions > button:not(#gravityToggle)').length,gravityButton:Boolean(document.querySelector('#gravityToggle')),layerIcons:document.querySelectorAll('.item.primary .layer-tools .icon').length,lengthIcons:document.querySelectorAll('.item.primary .length-control .icon').length}})()`);
       assert(nativeZoom.after > nativeZoom.before, 'Ctrl+wheel did not zoom in');
       assert(nativeZoom.min === '20', `zoom minimum is ${nativeZoom.min}`);
       assert(nativeZoom.fileMenu && nativeZoom.legacyActions === 0, 'file actions were not merged into one menu');
+      assert(nativeZoom.gravityButton, 'gravity toggle is missing');
       assert(nativeZoom.layerIcons === 6, `expected 6 layer icons, got ${nativeZoom.layerIcons}`);
       assert(nativeZoom.lengthIcons === 3, `expected 3 length icons, got ${nativeZoom.lengthIcons}`);
       pass('native zoom and integrated icons', `${nativeZoom.after}% zoom, min ${nativeZoom.min}%`);
     } catch (error) { fail('native zoom and integrated icons', error); }
+
+    try {
+      await setViewport(390, 844, true);
+      await reset();
+      const gravity = await evaluate(`(async()=>{if(!('DeviceMotionEvent' in window))window.DeviceMotionEvent=function(){};if(!('DeviceOrientationEvent' in window))window.DeviceOrientationEvent=function(){};const button=document.querySelector('#gravityToggle'),before=document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');button.click();await new Promise(resolve=>setTimeout(resolve,40));const event=new Event('devicemotion');Object.defineProperty(event,'accelerationIncludingGravity',{value:{x:9.81,y:0,z:0}});window.dispatchEvent(event);await new Promise(resolve=>setTimeout(resolve,180));return {pressed:button.getAttribute('aria-pressed'),changed:before!==document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d')}})()`);
+      assert(gravity.pressed === 'true', 'gravity toggle did not activate');
+      assert(gravity.changed, 'device motion did not wake wire physics');
+      pass('device gravity', 'motion sample changed the wire vector');
+    } catch (error) { fail('device gravity', error); }
 
     try {
       await setViewport(390, 844, true);
