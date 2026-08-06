@@ -229,6 +229,15 @@ async function main() {
     try {
       await setViewport(1280, 800, false);
       await reset();
+      const groupedLayers = await evaluate(`(()=>{const select=(id,shift=false)=>document.querySelector('.item[data-id="'+id+'"] .item-main').dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:shift}));select('0001');select('0002',true);window.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,code:'BracketRight',key:']',ctrlKey:true}));const state=JSON.parse(localStorage.getItem('wires-v2'));return {selected:[...document.querySelectorAll('.item.active')].map(row=>row.dataset.id),order:state.wires.map(w=>w.id)}})()`);
+      assert(groupedLayers.selected.length === 2, `expected 2 selected layers, got ${groupedLayers.selected.length}`);
+      assert(groupedLayers.order.join(',') === '0003,0001,0002', `selected layers reordered as ${groupedLayers.order.join(',')}`);
+      pass('group layer reorder', 'selected layers moved together and kept order');
+    } catch (error) { fail('group layer reorder', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
       const nativeZoom = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),before=Number(document.querySelector('#zoom').value);scene.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-120,clientX:r.width/2,clientY:r.height/2}));await new Promise(resolve=>setTimeout(resolve,40));return {before,after:Number(document.querySelector('#zoom').value),min:document.querySelector('#zoom').min,fileMenu:Boolean(document.querySelector('.file-menu')),legacyActions:document.querySelectorAll('.top-actions > button:not(#gravityToggle):not(#collisionToggle)').length,gravityButton:Boolean(document.querySelector('#gravityToggle')),layerIcons:document.querySelectorAll('.item.primary .layer-tools .icon').length,lengthIcons:document.querySelectorAll('.item.primary .length-control .icon').length}})()`);
       assert(nativeZoom.after > nativeZoom.before, 'Ctrl+wheel did not zoom in');
       assert(nativeZoom.min === '20', `zoom minimum is ${nativeZoom.min}`);
@@ -343,7 +352,7 @@ async function main() {
       server.kill('SIGTERM');
       await Promise.race([new Promise(resolve => server.once('exit', resolve)), sleep(1000)]);
     }
-    await rm(profile, {recursive: true, force: true});
+    await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:100});
   }
 }
 
