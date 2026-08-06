@@ -290,6 +290,16 @@ async function main() {
       pass('pin collision', `tail redirected to ${pinCollision.tail.join(',')}`);
     } catch (error) { fail('pin collision', error); }
 
+    try {
+      await setViewport(390, 844, true);
+      await reset();
+      await evaluate(`localStorage.setItem('wires-v2',JSON.stringify({version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:7,y:0,length:10,color:'#102cff'},{id:'0002',x:7,y:4,length:0,color:'#102cff'},{id:'0003',x:16,y:1,length:11,color:'#102cff'}]}));localStorage.setItem('wires-view-v1',JSON.stringify({x:0,y:0,zoom:1}));location.reload()`);
+      await sleep(700);
+      const bodyCollision = await evaluate(`(()=>{const d=document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d')||'',n=[...d.matchAll(/-?\\d+(?:\\.\\d+)?/g)].map(m=>Number(m[0])),xs=n.filter((_,i)=>i%2===0);return {deflected:xs.slice(1).some(x=>Math.abs(x-330)>2),path:d}})()`);
+      assert(bodyCollision.deflected, 'wire body passed through a foreign pin without deflection');
+      pass('wire-to-pin collision', 'body deflected around a foreign pin');
+    } catch (error) { fail('wire-to-pin collision', error); }
+
     const errors = await evaluate('[]');
     await evaluate("localStorage.clear(); location.reload();");
     const failed = results.filter(result => result.error);
