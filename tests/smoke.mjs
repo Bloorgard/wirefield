@@ -97,10 +97,11 @@ async function main() {
     await setViewport(1280, 800, false);
     await navigate();
     try {
-      const result = await evaluate(`(()=>({groups:document.querySelectorAll('.wire-group').length,rendered:[...document.querySelectorAll('.wire-body')].every(e=>Boolean(e.getAttribute('d'))),ids:[...document.querySelectorAll('.wire-group')].map(e=>e.dataset.id)}))()`);
+      const result = await evaluate(`(()=>({groups:document.querySelectorAll('.wire-group').length,rendered:[...document.querySelectorAll('.wire-body')].every(e=>Boolean(e.getAttribute('d'))),ids:[...document.querySelectorAll('.wire-group')].map(e=>e.dataset.id),collisionButton:Boolean(document.querySelector('#collisionToggle')),collisionOff:document.querySelector('#collisionToggle')?.getAttribute('aria-pressed')==='false'}))()`);
       assert(result.groups === 3, `expected 3 groups, got ${result.groups}`);
       assert(result.rendered, 'one or more SVG paths has no d attribute');
       assert(result.ids.join(',') === '0001,0002,0003', `unexpected IDs ${result.ids.join(',')}`);
+      assert(result.collisionButton && result.collisionOff, 'collision mode is not off by default');
       pass('fresh render', '3 groups with SVG geometry');
     } catch (error) { fail('fresh render', error); }
 
@@ -228,7 +229,7 @@ async function main() {
     try {
       await setViewport(1280, 800, false);
       await reset();
-      const nativeZoom = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),before=Number(document.querySelector('#zoom').value);scene.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-120,clientX:r.width/2,clientY:r.height/2}));await new Promise(resolve=>setTimeout(resolve,40));return {before,after:Number(document.querySelector('#zoom').value),min:document.querySelector('#zoom').min,fileMenu:Boolean(document.querySelector('.file-menu')),legacyActions:document.querySelectorAll('.top-actions > button:not(#gravityToggle)').length,gravityButton:Boolean(document.querySelector('#gravityToggle')),layerIcons:document.querySelectorAll('.item.primary .layer-tools .icon').length,lengthIcons:document.querySelectorAll('.item.primary .length-control .icon').length}})()`);
+      const nativeZoom = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),before=Number(document.querySelector('#zoom').value);scene.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-120,clientX:r.width/2,clientY:r.height/2}));await new Promise(resolve=>setTimeout(resolve,40));return {before,after:Number(document.querySelector('#zoom').value),min:document.querySelector('#zoom').min,fileMenu:Boolean(document.querySelector('.file-menu')),legacyActions:document.querySelectorAll('.top-actions > button:not(#gravityToggle):not(#collisionToggle)').length,gravityButton:Boolean(document.querySelector('#gravityToggle')),layerIcons:document.querySelectorAll('.item.primary .layer-tools .icon').length,lengthIcons:document.querySelectorAll('.item.primary .length-control .icon').length}})()`);
       assert(nativeZoom.after > nativeZoom.before, 'Ctrl+wheel did not zoom in');
       assert(nativeZoom.min === '20', `zoom minimum is ${nativeZoom.min}`);
       assert(nativeZoom.fileMenu && nativeZoom.legacyActions === 0, 'file actions were not merged into one menu');
@@ -306,6 +307,8 @@ async function main() {
       await reset();
       await evaluate(`localStorage.setItem('wires-v2',JSON.stringify({version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:7,y:0,length:10,color:'#102cff'},{id:'0002',x:7,y:4,length:0,color:'#102cff'},{id:'0003',x:16,y:1,length:11,color:'#102cff'}]}));localStorage.setItem('wires-view-v1',JSON.stringify({x:0,y:0,zoom:1}));location.reload()`);
       await sleep(700);
+      await evaluate("document.querySelector('#collisionToggle').click()");
+      await sleep(220);
       const bodyCollision = await evaluate(`(()=>{const d=document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d')||'',n=[...d.matchAll(/-?\\d+(?:\\.\\d+)?/g)].map(m=>Number(m[0])),xs=n.filter((_,i)=>i%2===0);return {deflected:xs.slice(1).some(x=>Math.abs(x-330)>2),path:d}})()`);
       assert(bodyCollision.deflected, 'wire body passed through a foreign pin without deflection');
       pass('wire-to-pin collision', 'body deflected around a foreign pin');
