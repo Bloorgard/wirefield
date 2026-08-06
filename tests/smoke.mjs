@@ -163,12 +163,14 @@ async function main() {
     try {
       await setViewport(390, 844, true);
       await reset();
-      const collapsed = await evaluate(`(()=>{const side=document.querySelector('.side'),button=document.querySelector('#layersToggle'),list=document.querySelector('#list');return {height:parseFloat(getComputedStyle(side).height),button:getComputedStyle(button).display,list:getComputedStyle(list).display}})()`);
-      assert(collapsed.height <= 120, `collapsed panel is ${collapsed.height}px`);
+      const collapsed = await evaluate(`(()=>{const side=document.querySelector('.side'),button=document.querySelector('#layersToggle'),list=document.querySelector('#list'),quick=document.querySelector('#compactLayerControls'),range=quick?.querySelector('input'),swatches=quick?.querySelectorAll('.swatch');return {height:parseFloat(getComputedStyle(side).height),button:getComputedStyle(button).display,list:getComputedStyle(list).display,quick:getComputedStyle(quick).display,range:Boolean(range),swatches:swatches?.length||0,toolDirection:getComputedStyle(document.querySelector('.tool-controls')).flexDirection,actionDirection:getComputedStyle(document.querySelector('.top-actions')).flexDirection}})()`);
+      assert(collapsed.height >= 145 && collapsed.height <= 170, `collapsed panel is ${collapsed.height}px`);
       assert(collapsed.button !== 'none', 'mobile layers button is hidden');
       assert(collapsed.list === 'none', 'mobile layer list is open by default');
-      const expanded = await evaluate(`(()=>{const b=document.querySelector('#layersToggle');b.click();return {open:document.querySelector('.side').classList.contains('layers-open'),list:getComputedStyle(document.querySelector('#list')).display}})()`);
-      assert(expanded.open && expanded.list === 'block', 'mobile layers panel did not open');
+      assert(collapsed.quick === 'block' && collapsed.range && collapsed.swatches === 6, 'compact layer controls are incomplete');
+      assert(collapsed.toolDirection === 'column' && collapsed.actionDirection === 'column', 'mobile top menus are not stacked');
+      const expanded = await evaluate(`(()=>{const b=document.querySelector('#layersToggle');b.click();const list=document.querySelector('#list'),side=document.querySelector('.side'),sr=side.getBoundingClientRect(),lr=list.getBoundingClientRect();return {open:side.classList.contains('layers-open'),list:getComputedStyle(list).display,fullWidth:lr.width>sr.width-30}})()`);
+      assert(expanded.open && expanded.list === 'block' && expanded.fullWidth, 'mobile layer panel did not open full width');
       await evaluate("document.querySelector('#layersToggle').click()");
       pass('mobile layers panel', `${collapsed.height}px collapsed, toggle opens list`);
     } catch (error) { fail('mobile layers panel', error); }
