@@ -1,0 +1,9 @@
+{
+  "name": "wires-editor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/smoke.mjs",
+    "test:smoke": "node tests/smoke.mjs"
+  }
+}
