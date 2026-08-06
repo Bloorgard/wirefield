@@ -144,6 +144,23 @@ async function main() {
     } catch (error) { fail('.wires round-trip and strict rejection', error); }
 
     try {
+      await reset();
+      await evaluate(`(()=>{localStorage.setItem('wires-v2',JSON.stringify({version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:-4,y:2,length:10,color:'#102cff'},{id:'0002',x:12,y:4,length:9,color:'#102cff'},{id:'0003',x:16,y:1,length:11,color:'#102cff'}]}));location.reload()})()`);
+      await sleep(2200);
+      const repaired = await evaluate(`({x:JSON.parse(localStorage.getItem('wires-v2')).wires.find(w=>w.id==='0001').x,toast:document.querySelector('#toast').textContent})`);
+      assert(repaired.x === 0, `repaired x is ${repaired.x}, expected 0`);
+      assert(repaired.toast.includes('Данные были исправлены'), `missing repair notice: ${repaired.toast}`);
+      pass('repaired localStorage notice');
+    } catch (error) { fail('repaired localStorage notice', error); }
+
+    try {
+      await reset();
+      const clipboard = await evaluate(`(async()=>{Object.defineProperty(navigator,'clipboard',{value:undefined,configurable:true});document.querySelector('#codeBtn').click();document.querySelector('#copyBtn').click();await new Promise(resolve=>setTimeout(resolve,100));return document.querySelector('#toast').textContent})()`);
+      assert(clipboard === 'Код скопирован' || clipboard === 'Не удалось скопировать код', `unexpected clipboard feedback: ${clipboard}`);
+      pass('clipboard fallback feedback', clipboard);
+    } catch (error) { fail('clipboard fallback feedback', error); }
+
+    try {
       await setViewport(390, 844, true);
       await reset();
       const collapsed = await evaluate(`(()=>{const side=document.querySelector('.side'),button=document.querySelector('#layersToggle'),list=document.querySelector('#list');return {height:parseFloat(getComputedStyle(side).height),button:getComputedStyle(button).display,list:getComputedStyle(list).display}})()`);
