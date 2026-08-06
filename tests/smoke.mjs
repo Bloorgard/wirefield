@@ -174,6 +174,38 @@ async function main() {
     } catch (error) { fail('mobile layers panel', error); }
 
     try {
+      await setViewport(390, 844, true);
+      await reset();
+      const touchDrag = await evaluate(`(async()=>{
+        const scene=document.querySelector('#scene'),body=document.querySelector('.wire-group[data-id="0001"] .wire-body'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=300,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),read=()=>document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');
+        body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:101,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));
+        scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:101,pointerType:'touch',button:0,buttons:1,clientX:sx+132,clientY:sy+44}));
+        await wait(120);
+        scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:101,pointerType:'touch',button:0,buttons:0,clientX:sx+132,clientY:sy+44}));
+        const samples=[];for(let i=0;i<8;i++){await wait(100);samples.push(read())}
+        return {unique:new Set(samples).size,moved:JSON.parse(localStorage.getItem('wires-v2')).wires.find(w=>w.id==='0001').x===10};
+      })()`);
+      assert(touchDrag.moved, 'touch drag did not commit x=10');
+      assert(touchDrag.unique >= 3, `touch release produced only ${touchDrag.unique} unique geometries`);
+      pass('mobile touch drag', `${touchDrag.unique} geometries after touch release`);
+    } catch (error) { fail('mobile touch drag', error); }
+
+    try {
+      await reset();
+      const before = JSON.stringify(await state());
+      const cancelled = await evaluate(`(async()=>{
+        const scene=document.querySelector('#scene'),body=document.querySelector('.wire-group[data-id="0001"] .wire-body'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=300;
+        body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:102,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));
+        scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:102,pointerType:'touch',button:0,buttons:1,clientX:sx+132,clientY:sy+44}));
+        scene.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:102,pointerType:'touch',button:0,buttons:0,clientX:sx+132,clientY:sy+44}));
+        await new Promise(resolve=>setTimeout(resolve,100));
+        return JSON.stringify(JSON.parse(localStorage.getItem('wires-v2')));
+      })()`);
+      assert(cancelled === before, 'pointercancel changed persisted state');
+      pass('mobile pointercancel rollback');
+    } catch (error) { fail('mobile pointercancel rollback', error); }
+
+    try {
       await setViewport(1280, 800, false);
       await reset();
       const release = await evaluate(`(async()=>{
