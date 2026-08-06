@@ -247,6 +247,18 @@ async function main() {
     try {
       await setViewport(1280, 800, false);
       await reset();
+      await evaluate(`localStorage.setItem('wires-v2',JSON.stringify({version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:12,y:4,length:8,color:'#102cff'},{id:'0002',x:3,y:1,length:8,color:'#102cff'},{id:'0003',x:7,y:1,length:8,color:'#102cff'}]}));location.reload()`);
+      await sleep(450);
+      const sortedLayers = await evaluate(`(()=>{const button=document.querySelector('#sortLayers');button.click();const first=JSON.parse(localStorage.getItem('wires-v2')).wires.map(w=>w.id);const firstTitle=button.title;button.click();const second=JSON.parse(localStorage.getItem('wires-v2')).wires.map(w=>w.id);return {first,second,firstTitle}})()`);
+      assert(sortedLayers.first.join(',') === '0002,0003,0001', `top-down order is ${sortedLayers.first.join(',')}`);
+      assert(sortedLayers.second.join(',') === '0001,0003,0002', `bottom-up order is ${sortedLayers.second.join(',')}`);
+      assert(sortedLayers.firstTitle.includes('снизу вверх'), `next sort direction title is ${sortedLayers.firstTitle}`);
+      pass('coordinate layer sorting', 'top-down and bottom-up orders follow x/y');
+    } catch (error) { fail('coordinate layer sorting', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
       const altCopy = await evaluate(`(async()=>{const select=(id,shift=false)=>document.querySelector('.item[data-id="'+id+'"] .item-main').dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:shift}));select('0001');select('0002',true);const scene=document.querySelector('#scene'),hit=document.querySelector('.wire-group[data-id="0001"] .wire-hit'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=r.top+240;hit.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:240,pointerType:'mouse',button:0,buttons:1,altKey:true,clientX:sx,clientY:sy}));scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:240,pointerType:'mouse',button:0,buttons:1,altKey:true,clientX:sx+88,clientY:sy+44}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:240,pointerType:'mouse',button:0,buttons:0,altKey:true,clientX:sx+88,clientY:sy+44}));await new Promise(resolve=>setTimeout(resolve,120));const wires=JSON.parse(localStorage.getItem('wires-v2')).wires,copies=wires.filter(w=>w.id==='0004'||w.id==='0005');return {count:wires.length,selected:[...document.querySelectorAll('.item.active')].map(row=>row.dataset.id),copies:copies.map(w=>[w.x,w.y])}})()`);
       assert(altCopy.count === 5, `Alt drag created ${altCopy.count-3} copies`);
       assert(altCopy.copies.length === 2 && altCopy.copies.every(([x,y])=>x>=9&&y>=3), `Alt copies did not move: ${JSON.stringify(altCopy.copies)}`);
