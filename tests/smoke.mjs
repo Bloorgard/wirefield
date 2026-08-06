@@ -174,11 +174,18 @@ async function main() {
     } catch (error) { fail('mobile layers panel', error); }
 
     try {
+      await reset();
+      const bodyDrag = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),body=document.querySelector('.wire-group[data-id="0001"] .wire-body'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=r.top+300;body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:99,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:99,pointerType:'touch',button:0,buttons:1,clientX:sx+132,clientY:sy+44}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:99,pointerType:'touch',button:0,buttons:0,clientX:sx+132,clientY:sy+44}));await new Promise(resolve=>setTimeout(resolve,60));return JSON.parse(localStorage.getItem('wires-v2')).wires.find(w=>w.id==='0001').x})()`);
+      assert(bodyDrag === 7, `body drag changed x to ${bodyDrag}`);
+      pass('body drag disabled');
+    } catch (error) { fail('body drag disabled', error); }
+
+    try {
       await setViewport(390, 844, true);
       await reset();
       const touchDrag = await evaluate(`(async()=>{
-        const scene=document.querySelector('#scene'),body=document.querySelector('.wire-group[data-id="0001"] .wire-body'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=300,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),read=()=>document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');
-        body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:101,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));
+        const scene=document.querySelector('#scene'),dot=document.querySelector('.wire-group[data-id="0001"] .wire-dot'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=r.top+110,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),read=()=>document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');
+        dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:100,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));dot.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:100,pointerType:'touch',button:0,buttons:0,clientX:sx,clientY:sy}));dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:101,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));
         scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:101,pointerType:'touch',button:0,buttons:1,clientX:sx+132,clientY:sy+44}));
         await wait(120);
         scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:101,pointerType:'touch',button:0,buttons:0,clientX:sx+132,clientY:sy+44}));
@@ -194,8 +201,8 @@ async function main() {
       await reset();
       const before = JSON.stringify(await state());
       const cancelled = await evaluate(`(async()=>{
-        const scene=document.querySelector('#scene'),body=document.querySelector('.wire-group[data-id="0001"] .wire-body'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=300;
-        body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:102,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));
+        const scene=document.querySelector('#scene'),dot=document.querySelector('.wire-group[data-id="0001"] .wire-dot'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=r.top+110;
+        dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:103,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));dot.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:103,pointerType:'touch',button:0,buttons:0,clientX:sx,clientY:sy}));dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:102,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));
         scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:102,pointerType:'touch',button:0,buttons:1,clientX:sx+132,clientY:sy+44}));
         scene.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:102,pointerType:'touch',button:0,buttons:0,clientX:sx+132,clientY:sy+44}));
         await new Promise(resolve=>setTimeout(resolve,100));
@@ -208,9 +215,47 @@ async function main() {
     try {
       await setViewport(1280, 800, false);
       await reset();
+      const nativeZoom = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),before=Number(document.querySelector('#zoom').value);scene.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-120,clientX:r.width/2,clientY:r.height/2}));await new Promise(resolve=>setTimeout(resolve,40));return {before,after:Number(document.querySelector('#zoom').value),min:document.querySelector('#zoom').min,fileMenu:Boolean(document.querySelector('.file-menu')),legacyActions:document.querySelectorAll('.top-actions > button').length,layerIcons:document.querySelectorAll('.item.primary .layer-tools .icon').length,lengthIcons:document.querySelectorAll('.item.primary .length-control .icon').length}})()`);
+      assert(nativeZoom.after > nativeZoom.before, 'Ctrl+wheel did not zoom in');
+      assert(nativeZoom.min === '20', `zoom minimum is ${nativeZoom.min}`);
+      assert(nativeZoom.fileMenu && nativeZoom.legacyActions === 0, 'file actions were not merged into one menu');
+      assert(nativeZoom.layerIcons === 6, `expected 6 layer icons, got ${nativeZoom.layerIcons}`);
+      assert(nativeZoom.lengthIcons === 3, `expected 3 length icons, got ${nativeZoom.lengthIcons}`);
+      pass('native zoom and integrated icons', `${nativeZoom.after}% zoom, min ${nativeZoom.min}%`);
+    } catch (error) { fail('native zoom and integrated icons', error); }
+
+    try {
+      await setViewport(390, 844, true);
+      await reset();
+      const doubleTap = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),v=JSON.parse(localStorage.getItem('wires-view-v1')),x=r.left+80,y=r.top+250,send=(type,id)=>scene.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:id,pointerType:'touch',button:0,buttons:type==='pointerdown'?1:0,clientX:x,clientY:y}));send('pointerdown',201);send('pointerup',201);await new Promise(resolve=>setTimeout(resolve,80));send('pointerdown',202);send('pointerup',202);await new Promise(resolve=>setTimeout(resolve,100));const next=JSON.parse(localStorage.getItem('wires-v2'));return {count:next.wires.length,selected:[...document.querySelectorAll('.item.primary')].map(e=>e.dataset.id),zoom:v.zoom}})()`);
+      assert(doubleTap.count === 4, `double-tap created ${doubleTap.count - 3} objects`);
+      assert(doubleTap.selected.length === 1, 'double-tap did not select the created object');
+      pass('mobile double-tap creation', `created ${doubleTap.selected[0]}`);
+    } catch (error) { fail('mobile double-tap creation', error); }
+
+    try {
+      await reset();
+      const lengthResult = await evaluate(`(async()=>{document.querySelector('#layersToggle').click();const input=document.querySelector('.item.primary .length-control input'),before=document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');input.value='12';input.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:203,pointerType:'touch',clientX:120,clientY:700}));input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,80));const after=document.querySelector('.item.primary .wire-body')?.getAttribute('d'),wire=JSON.parse(localStorage.getItem('wires-v2')).wires.find(w=>w.id==='0001');return {length:wire.length,pathChanged:before!==after,controls:document.querySelectorAll('.item.primary .length-control button').length}})()`);
+      assert(lengthResult.length === 12, `mobile length is ${lengthResult.length}`);
+      assert(lengthResult.pathChanged, 'length change did not update SVG geometry immediately');
+      assert(lengthResult.controls === 3, `expected 3 length controls, got ${lengthResult.controls}`);
+      pass('mobile length controls', 'length and geometry update without canvas shake');
+    } catch (error) { fail('mobile length controls', error); }
+
+    try {
+      await setViewport(390, 844, true);
+      await reset();
+      const pinch = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),x=r.left+170,y=r.top+250;const down=(id,cx,cy)=>scene.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:id,pointerType:'touch',button:0,buttons:1,clientX:cx,clientY:cy})),move=(id,cx,cy)=>scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:id,pointerType:'touch',button:0,buttons:1,clientX:cx,clientY:cy})),up=id=>scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:id,pointerType:'touch',button:0,buttons:0,clientX:x,clientY:y}));down(204,x-30,y);down(205,x+30,y);move(205,x+60,y);await new Promise(resolve=>setTimeout(resolve,40));const zoom=Number(document.querySelector('#zoom').value);up(204);up(205);return zoom})()`);
+      assert(pinch > 100, `pinch zoom is ${pinch}%`);
+      pass('mobile pinch zoom', `${pinch}%`);
+    } catch (error) { fail('mobile pinch zoom', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
       const release = await evaluate(`(async()=>{
-        const scene=document.querySelector('#scene'),body=document.querySelector('.wire-group[data-id="0001"] .wire-body'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=300,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),read=()=>document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');
-        body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:91,button:0,buttons:1,clientX:sx,clientY:sy}));
+        const scene=document.querySelector('#scene'),dot=document.querySelector('.wire-group[data-id="0001"] .wire-dot'),r=scene.getBoundingClientRect(),sx=r.left+330,sy=r.top+110,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),read=()=>document.querySelector('.wire-group[data-id="0001"] .wire-body')?.getAttribute('d');
+        dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:90,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));dot.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:90,pointerType:'touch',button:0,buttons:0,clientX:sx,clientY:sy}));dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:91,pointerType:'touch',button:0,buttons:1,clientX:sx,clientY:sy}));
         scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:91,button:0,buttons:1,clientX:sx+132,clientY:sy+44}));
         await wait(120);
         scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:91,button:0,buttons:0,clientX:sx+132,clientY:sy+44}));
