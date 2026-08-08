@@ -84,8 +84,10 @@ async function main() {
       await sleep(350);
       await waitFor(async () => (await evaluate('document.readyState')) === 'complete');
     };
-    const reset = async () => {
-      await evaluate("localStorage.clear(); location.reload();");
+    const TEST_FIXTURE = {version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:7,y:2,length:10,color:'#102cff'},{id:'0002',x:12,y:4,length:9,color:'#102cff'},{id:'0003',x:16,y:1,length:11,color:'#102cff'}]};
+    const reset = async (defaultSketch=false) => {
+      const storage=defaultSketch?'localStorage.clear();':`localStorage.clear();localStorage.setItem('wires-v2',${JSON.stringify(JSON.stringify(TEST_FIXTURE))});`;
+      await evaluate(`${storage}location.reload();`);
       await sleep(350);
       await waitFor(async () => (await evaluate('document.readyState')) === 'complete');
     };
@@ -96,15 +98,19 @@ async function main() {
 
     await setViewport(1280, 800, false);
     await navigate();
+    await reset(true);
     try {
-      const result = await evaluate(`(()=>({groups:document.querySelectorAll('.wire-group').length,rendered:[...document.querySelectorAll('.wire-body')].every(e=>Boolean(e.getAttribute('d'))),ids:[...document.querySelectorAll('.wire-group')].map(e=>e.dataset.id),wireLabel:document.querySelector('#wireCountLabel')?.textContent,layersLabel:document.querySelector('#layersToggle')?.textContent,collisionButton:Boolean(document.querySelector('#collisionToggle')),collisionOff:document.querySelector('#collisionToggle')?.getAttribute('aria-pressed')==='false'}))()`);
-      assert(result.groups === 3, `expected 3 groups, got ${result.groups}`);
+      const result = await evaluate(`(()=>{const stored=JSON.parse(localStorage.getItem('wires-v2')),byId=Object.fromEntries(stored.wires.map(w=>[w.id,w]));return {groups:document.querySelectorAll('.wire-group').length,rendered:[...document.querySelectorAll('.wire-body')].every(e=>Boolean(e.getAttribute('d'))),ids:[...document.querySelectorAll('.wire-group')].map(e=>e.dataset.id),wireLabel:document.querySelector('#wireCountLabel')?.textContent,layersLabel:document.querySelector('#layersToggle')?.textContent,canvas:getComputedStyle(document.querySelector('.canvas')).backgroundColor,state:{background:stored.background,pointMode:stored.pointMode,gridVisible:stored.gridVisible,count:stored.wires.length},pins:['0126','0127','0128'].map(id=>byId[id]),uniqueStarts:new Set(stored.wires.map(w=>w.x+','+w.y)).size,collisionButton:Boolean(document.querySelector('#collisionToggle')),collisionOff:document.querySelector('#collisionToggle')?.getAttribute('aria-pressed')==='false'}})()`);
+      assert(result.groups === 48, `expected 48 groups, got ${result.groups}`);
       assert(result.rendered, 'one or more SVG paths has no d attribute');
-      assert(result.ids.join(',') === '0001,0002,0003', `unexpected IDs ${result.ids.join(',')}`);
+      assert(result.ids[0] === '0002' && result.ids.at(-1) === '0128' && result.uniqueStarts === 48, `unexpected default IDs or pin layout: ${result.ids.join(',')}`);
+      assert(result.canvas === 'rgb(16, 44, 255)' && result.state.background === '#102cff' && result.state.pointMode === 'white' && result.state.gridVisible, `unexpected default theme: ${JSON.stringify(result.state)}`);
+      assert(JSON.stringify(result.pins) === JSON.stringify([{id:'0126',x:22,y:17,length:13,color:'#f8f5ed',endX:29,endY:9},{id:'0127',x:30,y:12,length:7.5,color:'#f8f5ed',endX:33,endY:18},{id:'0128',x:27,y:16,length:6.5,color:'#f8f5ed',endX:32,endY:13}]), `unexpected white pinned wires: ${JSON.stringify(result.pins)}`);
       assert(result.collisionButton && result.collisionOff, 'collision mode is not off by default');
-      pass('fresh render', '3 groups with SVG geometry');
+      pass('fresh render', '48-wire blue default sketch with SVG geometry');
     } catch (error) { fail('fresh render', error); }
 
+    await reset();
     try {
       const before = await state();
       await evaluate("document.querySelector('.item[data-id=\"0001\"] .item-main').click(); window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',code:'ArrowRight',bubbles:true}));");
@@ -229,11 +235,20 @@ async function main() {
     try {
       await setViewport(1280, 800, false);
       await reset();
-      const commandPoints = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),hitA=document.querySelector('.wire-group[data-id="0001"] .wire-hit'),hitB=document.querySelector('.wire-group[data-id="0003"] .wire-hit'),r=scene.getBoundingClientRect(),ax=r.left+330,ay=r.top+110,bx=r.left+726,by=r.top+66;hitA.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:230,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:ax,clientY:ay}));hitB.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:231,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:bx,clientY:by}));const selected={a:document.querySelector('.wire-group[data-id="0001"] .wire-dot').classList.contains('point-selected'),b:document.querySelector('.wire-group[data-id="0003"] .wire-dot').classList.contains('point-selected')};const dot= document.querySelector('.wire-group[data-id="0003"] .wire-dot');dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:1,clientX:bx,clientY:by}));scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:1,clientX:bx+44,clientY:by}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:0,clientX:bx+44,clientY:by}));await new Promise(resolve=>setTimeout(resolve,100));const wires=JSON.parse(localStorage.getItem('wires-v2')).wires;return {selected,moved:wires.find(w=>w.id==='0001').x===8&&wires.find(w=>w.id==='0003').x===17}})()`);
+      const commandPoints = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),hitA=document.querySelector('.wire-group[data-id="0001"] .wire-hit'),hitB=document.querySelector('.wire-group[data-id="0003"] .wire-hit'),r=scene.getBoundingClientRect(),ax=r.left+330,ay=r.top+110,bx=r.left+726,by=r.top+66;hitA.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:230,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:ax,clientY:ay}));hitB.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:231,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:bx,clientY:by}));const selected={a:document.querySelector('.wire-group[data-id="0001"] .wire-dot').classList.contains('point-selected'),b:document.querySelector('.wire-group[data-id="0003"] .wire-dot').classList.contains('point-selected')};const dot= document.querySelector('.wire-group[data-id="0003"] .wire-dot');dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:bx,clientY:by}));scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:1,clientX:bx+44,clientY:by}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:232,pointerType:'mouse',button:0,buttons:0,clientX:bx+44,clientY:by}));await new Promise(resolve=>setTimeout(resolve,100));const wires=JSON.parse(localStorage.getItem('wires-v2')).wires;return {selected,moved:wires.find(w=>w.id==='0001').x===8&&wires.find(w=>w.id==='0003').x===17}})()`);
       assert(commandPoints.selected.a && commandPoints.selected.b, 'Command click did not add both point selections');
       assert(commandPoints.moved, 'Command-selected points did not move together');
       pass('Command point selection', 'Mac modifier selects and drags multiple points');
     } catch (error) { fail('Command point selection', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
+      const boxedPoints = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),dots=['0001','0003'].map(id=>document.querySelector('.wire-group[data-id="'+id+'"] .wire-dot')),rects=dots.map(dot=>dot.getBoundingClientRect()),left=Math.min(...rects.map(r=>r.left))-8,right=Math.max(...rects.map(r=>r.right))+8,top=Math.min(...rects.map(r=>r.top))-8,bottom=Math.max(...rects.map(r=>r.bottom))+8,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));scene.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:233,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:left,clientY:top}));scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:233,pointerType:'mouse',button:0,buttons:1,metaKey:true,clientX:right,clientY:bottom}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:233,pointerType:'mouse',button:0,buttons:0,metaKey:true,clientX:right,clientY:bottom}));const selected=dots.map(dot=>dot.classList.contains('point-selected'));const r=rects[1],dot=dots[1],x=r.left+r.width/2,y=r.top+r.height/2;dot.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:234,pointerType:'mouse',button:0,buttons:1,clientX:x,clientY:y}));scene.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:234,pointerType:'mouse',button:0,buttons:1,clientX:x+44,clientY:y}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:234,pointerType:'mouse',button:0,buttons:0,clientX:x+44,clientY:y}));await wait(100);const wires=JSON.parse(localStorage.getItem('wires-v2')).wires;return {selected,moved:wires.find(w=>w.id==='0001').x===8&&wires.find(w=>w.id==='0003').x===17}})()`);
+      assert(boxedPoints.selected.every(Boolean), `selection box state ${JSON.stringify(boxedPoints)}`);
+      assert(boxedPoints.moved, 'selection-box point group did not move together');
+      pass('selection-box point group drag', 'Cmd box selected start points and moved them together');
+    } catch (error) { fail('selection-box point group drag', error); }
 
     try {
       await setViewport(1280, 800, false);
@@ -277,6 +292,83 @@ async function main() {
       assert(nativeZoom.lengthIcons === 3, `expected 3 length icons, got ${nativeZoom.lengthIcons}`);
       pass('native zoom and integrated icons', `${nativeZoom.after}% zoom, min ${nativeZoom.min}%`);
     } catch (error) { fail('native zoom and integrated icons', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
+      const toolbar = await evaluate(`(()=>{const ids=['addTool','selectTool','brushTool','eraseTool'],before=document.querySelectorAll('.wire-group').length;document.querySelector('#addTool').click();return {icons:ids.map(id=>Boolean(document.querySelector('#'+id+' .icon'))),sizes:[...ids,'resetView'].map(id=>getComputedStyle(document.querySelector('#'+id+' .icon')).width),labels:ids.map(id=>document.querySelector('#'+id).getAttribute('aria-label')),centerIcon:Boolean(document.querySelector('#resetView .icon')),count:document.querySelectorAll('.wire-group').length,before}})()`);
+      assert(toolbar.icons.every(Boolean) && toolbar.centerIcon, `toolbar SVGs missing: ${JSON.stringify(toolbar)}`);
+      assert(toolbar.sizes.every(size=>size === '30px'), `toolbar icon sizes are ${toolbar.sizes.join(',')}`);
+      assert(toolbar.labels.join(',') === 'Добавить жгут,Курсор,Карандаш,Ластик', `toolbar labels are ${toolbar.labels.join(',')}`);
+      assert(toolbar.count === toolbar.before + 1, `top add changed wire count from ${toolbar.before} to ${toolbar.count}`);
+      pass('icon toolbar and top add', 'archive SVGs rendered and top add created one wire');
+    } catch (error) { fail('icon toolbar and top add', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
+      const topMenu = await evaluate(`(()=>{const actions=['#gravityToggle','#collisionToggle','.file-menu summary'].map(selector=>{const style=getComputedStyle(document.querySelector(selector));return {fontSize:style.fontSize,letterSpacing:style.letterSpacing,textTransform:style.textTransform,paddingLeft:style.paddingLeft,paddingRight:style.paddingRight}}),swatches=[...document.querySelectorAll('.theme-swatch')],rects=swatches.map(button=>{const r=button.getBoundingClientRect();return {width:r.width,height:r.height,color:button.dataset.background,pressed:button.getAttribute('aria-pressed')}});swatches[1].click();const blue={stored:JSON.parse(localStorage.getItem('wires-v2')).background,pressed:swatches.map(button=>button.getAttribute('aria-pressed')),canvas:getComputedStyle(document.querySelector('#canvas')).backgroundColor};swatches[2].click();const white={stored:JSON.parse(localStorage.getItem('wires-v2')).background,pressed:swatches.map(button=>button.getAttribute('aria-pressed')),canvas:getComputedStyle(document.querySelector('#canvas')).backgroundColor};return {actions,rects,blue,white}})()`);
+      assert(topMenu.actions.every(style=>style.fontSize === '12px' && style.letterSpacing === '0.96px' && style.textTransform === 'uppercase' && style.paddingLeft === '13px' && style.paddingRight === '13px'), `top action typography or padding diverged: ${JSON.stringify(topMenu.actions)}`);
+      assert(topMenu.rects.length === 3 && topMenu.rects.every(swatch=>swatch.width === 36 && swatch.height === 36) && topMenu.rects.filter(swatch=>swatch.pressed === 'true').length === 1, `background swatches invalid: ${JSON.stringify(topMenu.rects)}`);
+      assert(topMenu.blue.stored === '#102cff' && topMenu.blue.pressed.join(',') === 'false,true,false' && topMenu.blue.canvas === 'rgb(16, 44, 255)', `blue swatch did not apply: ${JSON.stringify(topMenu.blue)}`);
+      assert(topMenu.white.stored === '#ffffff' && topMenu.white.pressed.join(',') === 'false,false,true' && topMenu.white.canvas === 'rgb(255, 255, 255)', `white swatch did not apply: ${JSON.stringify(topMenu.white)}`);
+      pass('top menu swatches', 'three square background choices switch the persisted canvas color');
+    } catch (error) { fail('top menu typography', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
+      const pointModes = await evaluate(`(()=>{const buttons=[...document.querySelectorAll('.point-mode-button')],dot=document.querySelector('.wire-group[data-id="0001"] .wire-dot'),sample=()=>({mode:JSON.parse(localStorage.getItem('wires-v2')).pointMode,pressed:buttons.map(button=>button.getAttribute('aria-pressed')),fill:getComputedStyle(dot).fill}),rects=buttons.map(button=>{const r=button.getBoundingClientRect();return {width:r.width,height:r.height}});buttons[1].click();const wire=sample();buttons[0].click();const white=sample();document.querySelector('.theme-swatch[data-background="#ffffff"]').click();buttons[0].click();const whiteOnWhite=sample();document.querySelector('.theme-swatch[data-background="#f200e9"]').click();buttons[2].click();const background=sample();return {rects,wire,white,whiteOnWhite,background}})()`);
+      assert(pointModes.rects.length === 3 && pointModes.rects.every(rect=>rect.width === 24 && rect.height === 36), `point mode button geometry invalid: ${JSON.stringify(pointModes.rects)}`);
+      assert(pointModes.wire.mode === 'wire' && pointModes.wire.pressed.join(',') === 'false,true,false' && pointModes.wire.fill === 'rgb(16, 44, 255)', `wire point mode failed: ${JSON.stringify(pointModes.wire)}`);
+      assert(pointModes.white.mode === 'white' && pointModes.white.pressed.join(',') === 'true,false,false' && pointModes.white.fill === 'rgb(248, 245, 237)', `white point mode failed: ${JSON.stringify(pointModes.white)}`);
+      assert(pointModes.whiteOnWhite.mode === 'white' && pointModes.whiteOnWhite.pressed.join(',') === 'true,false,false' && pointModes.whiteOnWhite.fill === 'rgb(16, 44, 255)', `white-background contrast mode failed: ${JSON.stringify(pointModes.whiteOnWhite)}`);
+      assert(pointModes.background.mode === 'background' && pointModes.background.pressed.join(',') === 'false,false,true' && pointModes.background.fill === 'rgb(242, 0, 233)', `background point mode failed: ${JSON.stringify(pointModes.background)}`);
+      pass('point color modes', 'white, wire-color, and background-color point modes render and persist');
+    } catch (error) { fail('point color modes', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
+      const gridState = await evaluate(`(()=>{const button=document.querySelector('#gridToggle'),canvas=document.querySelector('.canvas'),sample=()=>({pressed:button.getAttribute('aria-pressed'),active:button.getAttribute('aria-pressed')==='true',hidden:canvas.classList.contains('grid-hidden'),label:button.getAttribute('aria-label'),color:getComputedStyle(button).color});const enabled=sample();button.click();const disabled=sample();return {enabled,disabled}})()`);
+      assert(gridState.enabled.pressed === 'true' && gridState.enabled.active && !gridState.enabled.hidden && gridState.enabled.label === 'Спрятать сетку' && gridState.enabled.color === 'rgb(242, 0, 233)', `visible grid control state invalid: ${JSON.stringify(gridState.enabled)}`);
+      assert(gridState.disabled.pressed === 'false' && !gridState.disabled.active && gridState.disabled.hidden && gridState.disabled.label === 'Показать сетку' && gridState.disabled.color === 'rgb(248, 245, 237)', `hidden grid control state invalid: ${JSON.stringify(gridState.disabled)}`);
+      pass('grid button state', 'active styling and ARIA now track a visible grid');
+    } catch (error) { fail('grid button state', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
+      const lengthGeometry = await evaluate(`(()=>{const row=document.querySelector('.item.primary .length-control'),item=row.closest('.item'),input=row.querySelector('input'),buttons=[...row.querySelectorAll('button')].map(button=>button.getBoundingClientRect().width),range=input.getBoundingClientRect(),rows=[item.querySelector('.item-main'),row,item.querySelector('.layer-swatches'),item.querySelector('.layer-tools')].map(element=>element.getBoundingClientRect().height),divider=row.querySelector('.length-divider').getBoundingClientRect(),style=getComputedStyle(input);input.value=input.min;const min=input.value;input.value=input.max;const max=input.value;return {min,max,padding:[style.paddingLeft,style.paddingRight],backgroundSize:style.backgroundSize,backgroundRepeat:style.backgroundRepeat,divider:[style.borderRightWidth,getComputedStyle(row.querySelector('.length-up')).borderLeftWidth,divider.width,divider.height],buttons,rangeWidth:range.width,rows}})()`);
+      assert(lengthGeometry.min === '0', `length slider min is ${lengthGeometry.min}`);
+      assert(lengthGeometry.max === '48', `length slider max is ${lengthGeometry.max}`);
+      assert(lengthGeometry.padding.join(',') === '0px,0px', `length slider padding is ${lengthGeometry.padding.join(',')}`);
+      assert(lengthGeometry.backgroundSize.includes('18px') && lengthGeometry.backgroundRepeat === 'no-repeat', `length track geometry is ${lengthGeometry.backgroundSize} / ${lengthGeometry.backgroundRepeat}`);
+      assert(lengthGeometry.divider[0] === '0px' && lengthGeometry.divider[1] === '0px' && Math.abs(lengthGeometry.divider[2]) < .01 && Math.abs(lengthGeometry.divider[3]) < .01, `border-free divider geometry is ${lengthGeometry.divider.join(',')}`);
+      assert(lengthGeometry.buttons.every(width => Math.abs(width - lengthGeometry.buttons[0]) < .05), `length button widths differ: ${lengthGeometry.buttons.join(',')}`);
+      assert(Math.abs(lengthGeometry.rangeWidth / lengthGeometry.buttons[0] - 3) < .01, `length slider ratio is ${lengthGeometry.rangeWidth / lengthGeometry.buttons[0]}`);
+      assert(lengthGeometry.rows.every(height => Math.abs(height - 40) < .01), `compact row heights are ${lengthGeometry.rows.join(',')}`);
+      const compactEdges = await evaluate(`(()=>{const item=document.querySelector('.item.primary');return [item.querySelector('.item-main'),item.querySelector('.length-control'),item.querySelector('.layer-swatches'),item.querySelector('.layer-tools')].map(element=>{const rect=element.getBoundingClientRect();return {left:rect.left,right:rect.right,width:rect.width}})})()`);
+      assert(compactEdges.every(edge => Math.abs(edge.left - compactEdges[0].left) < .01 && Math.abs(edge.right - compactEdges[0].right) < .01), `compact row edges differ: ${JSON.stringify(compactEdges)}`);
+      const compactColumns = await evaluate(`(()=>{const item=document.querySelector('.item.primary'),rects=selector=>[...item.querySelectorAll(selector)].map(element=>{const rect=element.getBoundingClientRect();return [rect.left,rect.right]}),row=item.querySelector('.length-control'),length=[...row.querySelectorAll('button,input')].map(element=>{const rect=element.getBoundingClientRect();return [rect.left,rect.right]});return {palette:rects('.layer-swatches .swatch'),actions:rects('.layer-tools .layer-btn'),length}})()`);
+      assert(compactColumns.palette.length === 6 && compactColumns.actions.length === 6 && compactColumns.palette.every((edge,index) => edge.every((value,side) => Math.abs(value - compactColumns.actions[index][side]) < .01)), `palette/action dividers differ: ${JSON.stringify(compactColumns)}`);
+      const [minButton,downButton,slider,upButton] = compactColumns.length;
+      assert(compactColumns.length.length === 4 && minButton.every((value,side) => Math.abs(value - compactColumns.palette[0][side]) < .01) && downButton.every((value,side) => Math.abs(value - compactColumns.palette[1][side]) < .01) && Math.abs(slider[0] - compactColumns.palette[2][0]) < .01 && Math.abs(slider[1] - compactColumns.palette[4][1]) < .01 && upButton.every((value,side) => Math.abs(value - compactColumns.palette[5][side]) < .01), `length-row dividers differ: ${JSON.stringify(compactColumns)}`);
+      pass('desktop length slider geometry', 'four 40px rows; every shared column edge aligns; 1/6 · 1/6 · 1/2 · 1/6 with a thumb-aligned track');
+    } catch (error) { fail('desktop length slider geometry', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
+      const cardContrast = await evaluate(`(()=>{const choose=color=>{const swatch=[...document.querySelectorAll('.item.primary .layer-swatches .swatch')].find(button=>button.title===color);swatch.click();const row=document.querySelector('.item.primary'),main=row.querySelector('.item-main'),icon=row.querySelector('.length-up .icon');return {background:getComputedStyle(row,'::before').backgroundColor,foreground:getComputedStyle(main).color,icon:getComputedStyle(icon).stroke}};return {black:choose('#0b1118'),pink:choose('#f200e9'),light:choose('#ffc642')}})()`);
+      assert(cardContrast.black.background === 'rgb(11, 17, 24)', `black card background is ${cardContrast.black.background}`);
+      assert(cardContrast.black.foreground === 'rgb(248, 245, 237)' && cardContrast.black.icon === 'rgb(248, 245, 237)', `black card foreground is ${JSON.stringify(cardContrast.black)}`);
+      assert(cardContrast.pink.background === 'rgb(242, 0, 233)', `pink card background is ${cardContrast.pink.background}`);
+      assert(cardContrast.pink.foreground === 'rgb(248, 245, 237)' && cardContrast.pink.icon === 'rgb(248, 245, 237)', `pink card foreground is ${JSON.stringify(cardContrast.pink)}`);
+      assert(cardContrast.light.background === 'rgb(255, 198, 66)', `light card background is ${cardContrast.light.background}`);
+      assert(cardContrast.light.foreground === 'rgb(11, 17, 24)' && cardContrast.light.icon === 'rgb(11, 17, 24)', `light card foreground is ${JSON.stringify(cardContrast.light)}`);
+      pass('wire-color settings card contrast', 'black and pink wires use light text and SVG; light wire uses dark text and SVG');
+    } catch (error) { fail('wire-color settings card contrast', error); }
 
     try {
       await setViewport(390, 844, true);

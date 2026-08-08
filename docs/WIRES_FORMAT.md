@@ -7,7 +7,7 @@
 ```text
 wires 1
 canvas 44 #f200e9
-points interface
+points white
 grid visible
 
 wire 0001 x 7 y 2 length 10 color #102cff
@@ -29,7 +29,7 @@ wires 1
 
 ```text
 canvas CELL BACKGROUND
-points background|interface
+points white|wire|background
 grid visible|hidden
 ```
 
@@ -37,8 +37,10 @@ grid visible|hidden
 
 - `CELL`: число от 24 до 80;
 - `BACKGROUND`: `#f200e9`, `#102cff` или `#ffffff`;
+- `points white`: точки используют контрастный цвет интерфейса, белый на розовом и синем фоне и синий на белом;
+- `points wire`: каждая точка получает цвет своего жгута;
 - `points background`: точки окрашиваются как фон;
-- `points interface`: точки используют контрастный цвет;
+- устаревший импортируемый режим `points interface` читается как `points white`;
 - `grid visible` и `grid hidden`: состояние сетки.
 
 Если `canvas`, `points` или `grid` отсутствуют, загрузчик использует значения по умолчанию. Канонический экспорт всегда включает их.
