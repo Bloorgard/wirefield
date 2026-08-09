@@ -27,3 +27,16 @@ test('spatial collision solver deflects a free segment around a foreign pin', ()
   assert.ok(contacts > 0);
   assert.notEqual(points[1].y, 22);
 });
+
+test('barycentric correction moves both free segment points away from the pin', () => {
+  const index = buildPinSpatialIndex(wires, cell);
+  const points = [
+    {x: 22, y: -200, ox: 22, oy: -200},
+    {x: 22, y: 22, ox: 22, oy: 22},
+    {x: 198, y: 22, ox: 198, oy: 22}
+  ];
+  const contacts = resolveWirePinCollisions('A', points, false, index, cell * 1.06, {correction: 0.35, maxPush: cell * 0.12});
+  assert.ok(contacts > 0);
+  assert.ok(points[1].y > 22);
+  assert.ok(points[2].y > 22);
+});

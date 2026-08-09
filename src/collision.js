@@ -54,7 +54,9 @@ function moveContact(point, dx, dy, normalX, normalY) {
   point.oy = point.y - keptVelocityY;
 }
 
-export function resolveWirePinCollisions(wireId, points, pinned, index, clearance) {
+export function resolveWirePinCollisions(wireId, points, pinned, index, clearance, options = {}) {
+  const correction = Number.isFinite(options.correction) ? options.correction : 1;
+  const maxPush = Number.isFinite(options.maxPush) ? options.maxPush : Infinity;
   const last = points.length - 1;
   let contacts = 0;
   for (let segment = 0; segment < last; segment++) {
@@ -78,15 +80,18 @@ export function resolveWirePinCollisions(wireId, points, pinned, index, clearanc
       const segmentLength = Math.sqrt(lengthSquared);
       const normalX = distance > 1e-6 ? deltaX / distance : (-segmentY / segmentLength || 1);
       const normalY = distance > 1e-6 ? deltaY / distance : (segmentX / segmentLength || 0);
-      const push = clearance - distance;
-      if (fixedStart && !fixedEnd) {
-        moveContact(end, normalX * push, normalY * push, normalX, normalY);
-      } else if (fixedEnd && !fixedStart) {
-        moveContact(start, -normalX * push, -normalY * push, -normalX, -normalY);
-      } else if (!fixedStart && !fixedEnd) {
-        const half = push * 0.5;
-        moveContact(start, -normalX * half, -normalY * half, -normalX, -normalY);
-        moveContact(end, normalX * half, normalY * half, normalX, normalY);
+      const push = Math.min(maxPush, (clearance - distance) * correction);
+      const startWeight = fixedStart ? 0 : 1 - projection;
+      const endWeight = fixedEnd ? 0 : projection;
+      const denominator = startWeight * startWeight + endWeight * endWeight;
+      if (denominator <= 1e-8) continue;
+      if (startWeight > 0) {
+        const startPush = Math.min(maxPush, push * startWeight / denominator);
+        moveContact(start, normalX * startPush, normalY * startPush, normalX, normalY);
+      }
+      if (endWeight > 0) {
+        const endPush = Math.min(maxPush, push * endWeight / denominator);
+        moveContact(end, normalX * endPush, normalY * endPush, normalX, normalY);
       }
     }
   }
