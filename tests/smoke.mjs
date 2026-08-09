@@ -131,6 +131,18 @@ async function main() {
     } catch (error) { fail('add and delete', error); }
 
     try {
+      const limitFixture = {version:1,cell:44,background:'#f200e9',pointMode:'white',gridVisible:true,wires:Array.from({length:999},(_,i)=>({id:String(i+1).padStart(4,'0'),x:i,y:0,length:0,color:'#102cff'}))};
+      await evaluate(`localStorage.clear();localStorage.setItem('wires-v2',${JSON.stringify(JSON.stringify(limitFixture))});location.reload()`);
+      await sleep(1200);
+      await waitFor(async () => (await evaluate("document.querySelectorAll('.wire-group').length")) === 999, 10000);
+      const capacity = await evaluate(`(()=>{const count=()=>JSON.parse(localStorage.getItem('wires-v2')).wires.length,limitToast=()=>document.querySelector('#toast').textContent.includes('Лимит: 1000');document.querySelector('#addBtn').click();const afterBoundary=count();document.querySelector('#addBtn').click();const addBlocked={count:count(),toast:limitToast()};document.querySelector('.item.primary .copy').click();const duplicateBlocked={count:count(),toast:limitToast()};document.querySelector('#brushTool').click();const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),x=r.left+44,y=r.top+176;scene.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:901,pointerType:'mouse',button:0,buttons:1,clientX:x,clientY:y}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:901,pointerType:'mouse',button:0,buttons:0,clientX:x,clientY:y}));const brushBlocked={count:count(),toast:limitToast()};document.querySelector('#selectTool').click();const body=document.querySelector('.wire-group[data-id="1000"] .wire-body');body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:902,pointerType:'mouse',button:0,buttons:1,altKey:true,clientX:x,clientY:y}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:902,pointerType:'mouse',button:0,buttons:0,altKey:true,clientX:x,clientY:y}));const altBlocked={count:count(),toast:limitToast()};return {afterBoundary,addBlocked,duplicateBlocked,brushBlocked,altBlocked}})()`);
+      assert(capacity.afterBoundary === 1000, `999 boundary created ${capacity.afterBoundary} wires`);
+      assert(['addBlocked','duplicateBlocked','brushBlocked','altBlocked'].every(key=>capacity[key].count===1000&&capacity[key].toast), `capacity path escaped: ${JSON.stringify(capacity)}`);
+      pass('wire capacity boundary', 'Add reaches 1000; Add, Duplicate, Brush, and Alt-copy stop at the limit');
+      await reset();
+    } catch (error) { fail('wire capacity boundary', error); }
+
+    try {
       await reset();
       const formatResult = await evaluate(`(()=>{
         const original=localStorage.getItem('wires-v2');
@@ -159,6 +171,14 @@ async function main() {
       assert(repaired.toast.includes('Данные были исправлены'), `missing repair notice: ${repaired.toast}`);
       pass('repaired localStorage notice');
     } catch (error) { fail('repaired localStorage notice', error); }
+
+    try {
+      await reset();
+      const storageFailure = await evaluate(`(()=>{const descriptor=Object.getOwnPropertyDescriptor(Storage.prototype,'setItem');Object.defineProperty(Storage.prototype,'setItem',{...descriptor,value(){throw new DOMException('Quota exceeded','QuotaExceededError')}});try{document.querySelector('#addBtn').click();const groups=document.querySelectorAll('.wire-group').length,stored=JSON.parse(localStorage.getItem('wires-v2')).wires.length,toast=document.querySelector('#toast').textContent;document.querySelector('#codeBtn').click();const exported=(document.querySelector('#codeArea').value.match(/^wire /gm)||[]).length;document.querySelector('#codeDialog').close();return {groups,stored,toast,exported}}finally{Object.defineProperty(Storage.prototype,'setItem',descriptor)}})()`);
+      assert(storageFailure.groups === 4 && storageFailure.stored === 3 && storageFailure.exported === 4, `storage failure lost the in-memory recovery copy: ${JSON.stringify(storageFailure)}`);
+      assert(storageFailure.toast.includes('Автосохранение недоступно') && storageFailure.toast.includes('.wires'), `storage failure feedback missing: ${storageFailure.toast}`);
+      pass('storage failure recovery', 'Quota error keeps the tab usable and exposes a four-wire .wires recovery copy');
+    } catch (error) { fail('storage failure recovery', error); }
 
     try {
       await reset();

@@ -1,0 +1,43 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve Chrome
+        run: |
+          chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -n "$chrome"
+          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
+
+      - name: Check smoke harness syntax
+        run: node --check tests/smoke.mjs
+
+      - name: Run browser smoke suite
+        run: npm test
+
+      - name: Check committed whitespace
+        run: git show --check --format= HEAD
