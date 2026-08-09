@@ -83,7 +83,13 @@ benchmarks/collision.mjs    legacy/spatial comparison
 
 ## Публикация
 
-Live release должен содержать:
+Соберите минимальный static output:
+
+```bash
+npm run build
+```
+
+`dist/` содержит:
 
 ```text
 index.html

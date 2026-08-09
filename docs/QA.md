@@ -106,11 +106,12 @@ git show --check --format= HEAD
 ```bash
 npm test
 npm run benchmark:collision
+npm run build
 node --check tests/smoke.mjs
 git diff --check
 ```
 
-Release должен содержать:
+Публикуется каталог `dist/`, который содержит:
 
 ```text
 index.html

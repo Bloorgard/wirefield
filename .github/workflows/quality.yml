@@ -33,6 +33,9 @@ jobs:
           test -n "$chrome"
           echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
 
+      - name: Build static release
+        run: npm run build
+
       - name: Check smoke harness syntax
         run: node --check tests/smoke.mjs
 

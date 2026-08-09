@@ -14,7 +14,7 @@
 - Модель, нормализация и `.wires` parser/serializer вынесены в чистые ES-модули с unit-тестами.
 - Collision solver использует spatial index; benchmark на 1000 жгутов сокращает distance checks в 127.9 раза.
 - SVG start/tail handles получили keyboard selection и сдвиг стрелками; toast, dialog и динамические controls получили доступные имена и роли.
-- Статический release теперь включает `index.html` и runtime-модули из `src/`.
+- Статический release теперь включает `index.html` и runtime-модули из `src/`; `npm run build` создаёт минимальный `dist/`.
 
 ## 2026-08-06
 
