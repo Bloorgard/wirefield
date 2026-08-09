@@ -1,8 +1,6 @@
 # QA
 
-## Быстрый запуск
-
-Из корня проекта:
+## Полный запуск
 
 ```bash
 npm test
@@ -10,108 +8,115 @@ npm test
 
 Требования:
 
-- Node.js с поддержкой ES modules, `fetch` и WebSocket;
+- Node.js 22;
 - Python 3;
 - Chromium или Google Chrome.
 
-Локальный harness по умолчанию использует Chromium на Radxa:
-
-```text
-/home/hermesbot/.cache/ms-playwright/chromium-1234/chrome-linux/chrome
-```
-
-Другой браузер задаётся явно:
+Другой browser binary:
 
 ```bash
 CHROME_BIN=/path/to/chrome npm test
 ```
 
-Проверка live-версии:
+Live-проверка:
 
 ```bash
-WIRES_URL=https://wires.pustota.link/ npm test
+WIRES_URL=https://wires.pustota.link/ npm run test:smoke
 ```
 
-Другой CDP-порт:
+Без `WIRES_URL` harness поднимает HTTP-сервер на `127.0.0.1:8765`. Chromium использует временный профиль, который удаляется после прогона.
+
+## Unit tests
 
 ```bash
-CDP_PORT=9333 npm test
+npm run test:unit
 ```
 
-Без `WIRES_URL` harness поднимает `python3 -m http.server` на `127.0.0.1:8765`. Chromium запускается с временным профилем, который удаляется после прогона. Пользовательский браузер и его `localStorage` не затрагиваются.
+Текущий набор содержит 11 тестов для:
 
-## Что проверяется
+- нормализации и legacy migration;
+- model limits, IDs, координат и занятых клеток;
+- tail minimum и pin cells;
+- `.wires` round-trip и строгого parser;
+- лимитов файла и числа жгутов;
+- spatial index, порядка кандидатов и collision response.
 
-Текущий набор содержит 33 сценария:
+Успешный прогон заканчивается `11 tests passed` в TAP-отчёте.
 
-1. чистый рендер стартового рисунка из 48 жгутов;
-2. движение с клавиатуры и undo;
-3. добавление и удаление;
-4. граница 1000 жгутов для Add, Duplicate, Brush и Alt-copy;
-5. round-trip `.wires` и строгий отказ от лишнего токена;
-6. уведомление после нормализации сохранённых данных;
-7. восстановление при `QuotaExceededError` в `localStorage`;
-8. Clipboard fallback;
-9. компактная мобильная панель;
-10. запрет обычного body drag;
-11. mobile touch drag и release-фаза;
-12. mobile `pointercancel` с откатом;
-13. совместное перемещение start и tail points;
-14. Command/Meta selection и group drag;
-15. рамочное выделение точек и group drag;
-16. групповое изменение порядка слоёв;
-17. координатная сортировка слоёв;
-18. Alt-copy drag;
-19. native zoom и встроенные иконки;
-20. icon toolbar и верхняя кнопка Add;
-21. три swatch-фона;
-22. режимы точек `white`, `wire`, `background`;
-23. состояние кнопки сетки;
-24. геометрия desktop length controls;
-25. контраст settings card для цветов жгута;
-26. синтетическое device gravity событие;
-27. mobile double-tap creation;
-28. mobile length controls;
-29. mobile pinch zoom;
-30. release physics после drag;
-31. pin collision;
-32. wire-to-pin collision;
-33. стабильность соседних пинов.
+## Browser smoke
 
-Успешный прогон заканчивается строкой:
+```bash
+npm run test:smoke
+```
+
+Текущий набор содержит 34 сценария. Он проверяет стартовый рисунок, keyboard/undo, Add/Delete, границу 1000, `.wires`, storage recovery, mobile gestures, point selection, group drag, layer reorder, zoom, toolbar, фоны, point modes, grid semantics, layout geometry, sensor gravity и collision behavior.
+
+Отдельный accessibility scenario проверяет:
+
+- polite live status;
+- dialog labels и description;
+- роли control groups;
+- названия zoom и color controls;
+- semantics SVG point handles;
+- реальный ArrowRight nudge через keyboard event.
+
+Успешный прогон заканчивается:
 
 ```text
-33/33 checks passed
+34/34 checks passed
 ```
 
-Большинство сценариев явно загружает компактный fixture из трёх жгутов. Чистый старт проверяется отдельно на встроенном рисунке из 48 жгутов. Harness не обещает reset перед каждой отдельной assertion-группой; изоляцию обеспечивает временный профиль браузера и явные вызовы `reset()` на границах сценариев.
+## Collision benchmark
 
-## Ограничения harness
+```bash
+npm run benchmark:collision
+```
 
-- touch-события синтетические и не проверяют точность попадания пальцем;
-- sensor permission, ориентацию осей и системные жесты нужно проверять на физических устройствах;
-- visual defects требуют screenshot или browser vision;
-- physics timing в headless Chromium не является физическим эталоном;
-- dialog parser round-trip не заменяет отдельную проверку системного file-picker и скачанного Blob;
-- collision performance на больших документах проверяется отдельным benchmark, а не функциональным smoke.
+Benchmark сравнивает полный legacy scan и spatial index на 100, 500 и 1000 жгутах. Он считает distance checks, измеряет локальное время и требует совпадения числа контактов. Время является диагностикой; CI не применяет performance threshold.
+
+Последний Radxa-прогон для 1000 жгутов:
+
+```text
+legacy checks: 15 984 000
+spatial checks: 124 958
+reduction: 127.9x
+```
+
+## Ограничения автоматизации
+
+- synthetic touch не заменяет физический телефон;
+- sensor permissions и ориентация осей проверяются на устройствах;
+- visual defects требуют screenshot QA;
+- dialog round-trip не заменяет проверку системного file-picker и скачанного Blob;
+- screen-reader UX требует ручной проверки VoiceOver или NVDA.
 
 ## GitHub Actions
 
-Workflow `.github/workflows/quality.yml` запускается для push и pull request в `main`. Он использует Node.js 22 и системный Chrome на `ubuntu-latest`, затем выполняет:
+`.github/workflows/quality.yml` запускается для push и pull request в `main`:
 
 ```bash
 node --check tests/smoke.mjs
 npm test
+npm run benchmark:collision
 git show --check --format= HEAD
 ```
 
-## Перед production-публикацией
+## Перед production
 
 ```bash
 npm test
+npm run benchmark:collision
 node --check tests/smoke.mjs
 git diff --check
-sha256sum index.html
 ```
 
-В статический release входит только `index.html`. Тесты, документация, `.git` и пользовательские данные не публикуются.
+Release должен содержать:
+
+```text
+index.html
+src/model.js
+src/wires-format.js
+src/collision.js
+```
+
+После staging deploy обязательны browser smoke, console check и визуальная проверка desktop/mobile.

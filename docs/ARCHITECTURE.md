@@ -2,26 +2,32 @@
 
 ## Общая схема
 
-WIRES — статическое приложение без backend и серверного состояния. Разметка, CSS и runtime JavaScript пока находятся в `index.html`.
+WIRES — статическое приложение без backend и серверного состояния. Браузер загружает `index.html` и три ES-модуля.
 
 ```text
 index.html
-├── разметка панели и SVG-холста
-├── CSS desktop/mobile layout
-└── JavaScript
-    ├── модель рисунка и нормализация
-    ├── safe localStorage persistence
-    ├── parser/serializer .wires
-    ├── UI и слои
-    ├── pointer/keyboard interactions
-    └── physics loop
+├── разметка и CSS
+├── UI и interactions
+└── physics loop
+
+src/model.js
+├── constants и model limits
+├── normalizeModel
+└── pin/grid helpers
+
+src/wires-format.js
+├── parseWires
+└── serializeWires
+
+src/collision.js
+├── pin spatial index
+├── segment query
+└── collision response
 ```
 
-Smoke-test `tests/smoke.mjs` управляет Chromium через CDP без npm-зависимостей.
+Unit-тесты используют `node:test`. Browser suite управляет Chromium через CDP без сторонних npm-зависимостей.
 
 ## Модель данных
-
-Состояние рисунка имеет вид:
 
 ```js
 {
@@ -44,32 +50,33 @@ Smoke-test `tests/smoke.mjs` управляет Chromium через CDP без n
 }
 ```
 
-`pointMode` принимает `white`, `wire` или `background`. Legacy-поле `pointsMatchBackground` мигрирует в `pointMode` во время нормализации. `endX` и `endY` присутствуют только у закреплённого хвоста.
+`pointMode` принимает `white`, `wire` или `background`. Legacy-поле `pointsMatchBackground` мигрирует во время нормализации. `endX` и `endY` присутствуют у закреплённого хвоста.
 
-Модель ограничена 1000 жгутами. Parser отклоняет превышение, normalize ограничивает внешние или legacy-данные, а Add, Duplicate, Brush и Alt-copy проверяют свободную ёмкость до изменения state.
+Модель ограничена 1000 жгутами. Parser отклоняет превышение. `normalizeModel` ограничивает внешние данные, а Add, Duplicate, Brush и Alt-copy проверяют ёмкость до изменения state.
 
 ## Runtime-физика
 
-Для каждого жгута создаётся runtime-состояние с массивом внутренних точек. Стартовая точка и закреплённый хвост выступают ограничениями. Внутренние точки обновляются Verlet-подобным шагом с гравитацией, демпфированием и десятью проходами коррекции расстояния.
+Каждый жгут получает runtime-массив внутренних точек. Старт и закреплённый хвост выступают ограничениями. Verlet-подобный шаг использует гравитацию, демпфирование и десять проходов коррекции расстояния.
 
-После drag запускается release-фаза на 90 кадров. Объект не засыпает, пока движутся внутренние точки. В idle-состоянии готовый SVG-путь не пересчитывается без необходимости.
+После drag запускается release-фаза на 90 кадров. Idle-жгут не пересчитывает готовый SVG path без движения. При `prefers-reduced-motion: reduce` runtime использует прямую интерполяцию.
 
-При `prefers-reduced-motion: reduce` физическая анимация заменяется прямой интерполяцией между концами.
+## Spatial collision index
 
-Опциональный wire-to-pin solver проверяет сегменты активного жгута против пинов других жгутов. Текущая реализация предназначена для небольших и средних рисунков; performance на максимуме модели требует spatial index и отдельного benchmark.
+`buildPinSpatialIndex()` строит hash пинов один раз на animation frame, когда коллизии включены. Сегмент запрашивает buckets вокруг своего bounding box, расширенного на clearance. Кандидаты сортируются по исходному порядку пинов, поэтому contact response детерминирован.
+
+В benchmark на 1000 жгутов число distance checks уменьшилось с 15 984 000 до 124 958, то есть в 127.9 раза. Время зависит от машины и не используется как CI threshold. Benchmark сверяет одинаковое число контактов legacy и spatial paths.
 
 ## Взаимодействия
 
-Pointer-события разделены по типам:
+- тело жгута выбирает объект; Alt/Option включает copy drag;
+- start и tail handles используют canonical point selection;
+- рамка и Cmd/Meta selection записывают те же point keys;
+- стрелки двигают выбранные точки на клетку, `Shift` на пять;
+- пустой холст отвечает за pan или рамку;
+- кисть и ластик обрабатывают клетки между pointer samples;
+- grip слоя изменяет порядок.
 
-- тело жгута: выбор; `Alt`/`Option` включает copy drag;
-- стартовая точка: изменение начала;
-- tail hit area: перемещение или закрепление хвоста;
-- пустой холст: pan или рамка выделения;
-- кисть и ластик: обработка клеток между предыдущей и текущей точкой;
-- grip слоя: изменение порядка.
-
-Обычный body drag не перемещает жгут. Групповое перемещение выполняется через выбранные start/tail points. `pointercancel` откатывает незавершённый drag к снимку перед началом действия.
+Обычный body drag отключён. `pointercancel` откатывает незавершённую операцию к снимку перед началом действия.
 
 ## Persistence
 
@@ -80,31 +87,20 @@ Pointer-события разделены по типам:
 | `wires-brush-length` | длина кисти |
 | `wires-brush-color` | цвет кисти |
 
-Чтение выполняется через `readStorage()`, запись через `writeStorage()`. Ошибки quota или запрета storage не останавливают текущую вкладку. Пользователь получает сообщение о необходимости скачать `.wires`; экспорт сериализует актуальное состояние из памяти.
+`readStorage()` и `writeStorage()` изолируют browser storage errors. При quota failure текущая вкладка продолжает работать, а `.wires` экспорт сериализует актуальный in-memory state.
 
-Undo хранит до десяти JSON-снимков модели в памяти вкладки. Persistent undo history отсутствует.
+Undo хранит до десяти JSON-снимков модели в памяти вкладки.
 
-## Нормализация
+## Доступность
 
-`normalize()` используется при загрузке, импорте и undo. Она проверяет границы, фон, режим точек, длину, координаты, ID, лимит объектов и занятые позиции. Импорт и загрузка сообщают пользователю, если данные были изменены.
+Панели инструментов имеют именованные группы. Toast работает как polite live region. Dialog связан с заголовком и пояснением. Динамические swatches получают accessible names. SVG start/tail handles доступны по Tab, выбираются Enter/Space и двигаются стрелками через тот же constraint path, что pointer drag.
 
-## Безопасность
+## Оставшаяся граница рефакторинга
 
-- значения ID и цветов проверяются до использования;
-- пользовательские ID вставляются в DOM через `textContent`;
-- импорт ограничен 1 МБ и 1000 жгутами;
-- parser не исполняет содержимое `.wires`;
-- Clipboard API имеет fallback без выполнения текста документа;
-- storage failure сохраняет доступ к in-memory документу и экспорту.
+Чистая модель, формат и collision solver уже вынесены. Следующие безопасные кандидаты:
 
-## Граница рефакторинга
+- `physics.js` для runtime integration и constraint loop;
+- `interactions.js` для pointer/keyboard controllers;
+- `ui.js` после стабилизации DOM contracts.
 
-Монолитный `index.html` остаётся главным техническим долгом. Безопасная последовательность разделения:
-
-1. чистый `wires-format.js` для parser/serializer;
-2. `model.js` для normalize и model limits;
-3. unit-тесты этих модулей;
-4. `physics.js` и collision spatial index;
-5. `interactions.js` и `ui.js` после стабилизации публичных функций.
-
-Каждый перенос должен сохранять browser smoke suite и статический способ публикации.
+Каждый перенос должен сохранять unit tests, browser smoke и статическую публикацию.

@@ -112,6 +112,18 @@ async function main() {
 
     await reset();
     try {
+      const accessibility = await evaluate(`(()=>{const toast=document.querySelector('#toast'),dialog=document.querySelector('#codeDialog'),start=document.querySelector('.wire-group[data-id="0001"] .wire-start-hit'),before=JSON.parse(localStorage.getItem('wires-v2')).wires.find(w=>w.id==='0001').x;start.focus();start.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',code:'ArrowRight',bubbles:true}));const after=JSON.parse(localStorage.getItem('wires-v2')).wires.find(w=>w.id==='0001').x;return {toast:[toast.getAttribute('role'),toast.getAttribute('aria-live'),toast.getAttribute('aria-atomic')],dialog:[dialog.getAttribute('aria-labelledby'),dialog.getAttribute('aria-describedby'),document.querySelector('#codeArea').getAttribute('aria-label')],groups:[document.querySelector('.tool-controls').getAttribute('role'),document.querySelector('.view-controls').getAttribute('role'),document.querySelector('#canvas').getAttribute('role')],zoom:[document.querySelector('#zoomOut').getAttribute('aria-label'),document.querySelector('#zoomIn').getAttribute('aria-label')],swatches:[...document.querySelectorAll('.item.primary .layer-swatches .swatch')].map(button=>button.getAttribute('aria-label')),start:[start.getAttribute('role'),start.getAttribute('tabindex'),start.getAttribute('aria-label'),start.getAttribute('aria-keyshortcuts')],before,after}})()`);
+      assert(JSON.stringify(accessibility.toast) === JSON.stringify(['status','polite','true']), `toast live region mismatch: ${JSON.stringify(accessibility.toast)}`);
+      assert(accessibility.dialog[0] === 'codeDialogTitle' && accessibility.dialog[1] === 'codeDialogHelp' && accessibility.dialog[2]?.includes('.wires'), `dialog labels missing: ${JSON.stringify(accessibility.dialog)}`);
+      assert(JSON.stringify(accessibility.groups) === JSON.stringify(['group','group','region']) && JSON.stringify(accessibility.zoom) === JSON.stringify(['Отдалить','Приблизить']), `control semantics missing: ${JSON.stringify(accessibility)}`);
+      assert(accessibility.swatches.length === 6 && accessibility.swatches.every(label=>label?.startsWith('Цвет жгута #')), `layer swatches lack names: ${JSON.stringify(accessibility.swatches)}`);
+      assert(accessibility.start[0] === 'button' && accessibility.start[1] === '0' && accessibility.start[2] === 'Начальная точка жгута 0001' && accessibility.start[3]?.includes('ArrowRight'), `point handle semantics missing: ${JSON.stringify(accessibility.start)}`);
+      assert(accessibility.after === accessibility.before + 1, `keyboard point nudge failed: ${accessibility.before} -> ${accessibility.after}`);
+      pass('accessible controls and point keyboard', 'live status, named dialog, labeled swatches, and ArrowRight point nudge');
+    } catch (error) { fail('accessible controls and point keyboard', error); }
+
+    await reset();
+    try {
       const before = await state();
       await evaluate("document.querySelector('.item[data-id=\"0001\"] .item-main').click(); window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',code:'ArrowRight',bubbles:true}));");
       const moved = await state();

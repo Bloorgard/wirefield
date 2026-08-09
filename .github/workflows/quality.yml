@@ -39,5 +39,8 @@ jobs:
       - name: Run browser smoke suite
         run: npm test
 
+      - name: Verify collision benchmark
+        run: npm run benchmark:collision
+
       - name: Check committed whitespace
         run: git show --check --format= HEAD
