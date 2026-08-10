@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>05 · Поле плотности — лаборатория WIRES</title>
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+<canvas id="stage"></canvas>
+<header class="lab-head">
+  <a class="back" href="index.html">← лаборатория</a>
+  <h1><small>вариант 05</small>Поле плотности</h1>
+  <p class="lead">Коллизии без единой пары. Всё — точки жгутов и пины — размазывается в сеточное поле плотности, а каждая точка отталкивается от его градиента. Цена не зависит от числа соприкосновений, поэтому жгут наконец начинает чувствовать не только пины, но и другие жгуты.</p>
+</header>
+<section class="panel hud" id="hud"></section>
+<section class="panel controls" id="controls"></section>
+<p class="hint">тяните белую точку · колесо — зум · перетаскивание фона — панорама</p>
+
+<script type="module">
+import {startLab, createChains, maxStretch, solveSegmentPins, CELL} from './lab.js';
+
+const solver = {
+  chains: null,
+  density: new Float32Array(0),
+  flowX: new Float32Array(0),
+  flowY: new Float32Array(0),
+  cols: 0,
+  rows: 0,
+  originX: 0,
+  originY: 0,
+  cellSize: CELL,
+  peak: 0,
+  contacts: 0,
+
+  init(lab) {
+    this.chains = createChains(lab);
+    this.cols = 0;
+  },
+
+  particleCount() {
+    return this.chains.total;
+  },
+
+  resizeField(lab) {
+    const size = CELL * lab.params.gridScale;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const pos = this.chains.pos;
+    for (let i = 0; i < this.chains.total; i++) {
+      const at = i * 2;
+      if (pos[at] < minX) minX = pos[at];
+      if (pos[at] > maxX) maxX = pos[at];
+      if (pos[at + 1] < minY) minY = pos[at + 1];
+      if (pos[at + 1] > maxY) maxY = pos[at + 1];
+    }
+    const pad = size * 3;
+    this.originX = minX - pad;
+    this.originY = minY - pad;
+    this.cellSize = size;
+    const cols = Math.max(4, Math.ceil((maxX - minX + pad * 2) / size));
+    const rows = Math.max(4, Math.ceil((maxY - minY + pad * 2) / size));
+    if (cols !== this.cols || rows !== this.rows) {
+      this.cols = cols;
+      this.rows = rows;
+      this.density = new Float32Array(cols * rows);
+      this.flowX = new Float32Array(cols * rows);
+      this.flowY = new Float32Array(cols * rows);
+    } else {
+      this.density.fill(0);
+      this.flowX.fill(0);
+      this.flowY.fill(0);
+    }
+  },
+
+  splat(x, y, weight, vx, vy) {
+    const fx = (x - this.originX) / this.cellSize;
+    const fy = (y - this.originY) / this.cellSize;
+    const ix = Math.floor(fx);
+    const iy = Math.floor(fy);
+    if (ix < 0 || iy < 0 || ix >= this.cols - 1 || iy >= this.rows - 1) return;
+    const tx = fx - ix;
+    const ty = fy - iy;
+    const base = iy * this.cols + ix;
+    const w00 = (1 - tx) * (1 - ty) * weight;
+    const w10 = tx * (1 - ty) * weight;
+    const w01 = (1 - tx) * ty * weight;
+    const w11 = tx * ty * weight;
+    this.density[base] += w00;
+    this.density[base + 1] += w10;
+    this.density[base + this.cols] += w01;
+    this.density[base + this.cols + 1] += w11;
+    this.flowX[base] += w00 * vx;
+    this.flowX[base + 1] += w10 * vx;
+    this.flowX[base + this.cols] += w01 * vx;
+    this.flowX[base + this.cols + 1] += w11 * vx;
+    this.flowY[base] += w00 * vy;
+    this.flowY[base + 1] += w10 * vy;
+    this.flowY[base + this.cols] += w01 * vy;
+    this.flowY[base + this.cols + 1] += w11 * vy;
+  },
+
+  step(dt, lab) {
+    const chains = this.chains;
+    const {pos, prev, vel, invMass, offset, rest, pinned} = chains;
+    const substeps = lab.params.substeps | 0;
+    const h = dt / substeps;
+    const drag = lab.params.drag;
+    const push = lab.params.push;
+    const stick = lab.params.stick;
+    const threshold = lab.params.threshold;
+    const pinWeight = lab.params.pinWeight;
+    const wireCount = lab.wires.length;
+    const angle = lab.params.tilt * Math.PI / 180;
+    lab.gravity.x = Math.sin(angle) * 792;
+    lab.gravity.y = Math.cos(angle) * 792;
+    this.contacts = 0;
+
+    for (let sub = 0; sub < substeps; sub++) {
+      for (let i = 0; i < chains.total; i++) {
+        if (invMass[i] === 0) continue;
+        const at = i * 2;
+        vel[at] += lab.gravity.x * h;
+        vel[at + 1] += lab.gravity.y * h;
+        const decay = Math.max(0, 1 - drag * h);
+        vel[at] *= decay;
+        vel[at + 1] *= decay;
+        prev[at] = pos[at];
+        prev[at + 1] = pos[at + 1];
+        pos[at] += vel[at] * h;
+        pos[at + 1] += vel[at + 1] * h;
+      }
+
+      this.resizeField(lab);
+      for (let i = 0; i < chains.total; i++) {
+        const at = i * 2;
+        this.splat(pos[at], pos[at + 1], 1, vel[at], vel[at + 1]);
+      }
+      for (let p = 0; p < lab.pinCount; p++) this.splat(lab.pinX[p], lab.pinY[p], pinWeight, 0, 0);
+
+      // Отталкивание по градиенту поля. Собственный вклад точки вычитается:
+      // иначе градиент её же кляксы тянет частицу к ближайшему узлу сетки и
+      // на картинке проступает сама сетка.
+      for (let i = 0; i < chains.total; i++) {
+        if (invMass[i] === 0) continue;
+        const at = i * 2;
+        const fx = (pos[at] - this.originX) / this.cellSize;
+        const fy = (pos[at + 1] - this.originY) / this.cellSize;
+        const ix = Math.floor(fx);
+        const iy = Math.floor(fy);
+        if (ix < 0 || iy < 0 || ix >= this.cols - 1 || iy >= this.rows - 1) continue;
+        const tx = fx - ix;
+        const ty = fy - iy;
+        const base = iy * this.cols + ix;
+        const d00 = this.density[base] - (1 - tx) * (1 - ty);
+        const d10 = this.density[base + 1] - tx * (1 - ty);
+        const d01 = this.density[base + this.cols] - (1 - tx) * ty;
+        const d11 = this.density[base + this.cols + 1] - tx * ty;
+        const value = d00 * (1 - tx) * (1 - ty) + d10 * tx * (1 - ty) + d01 * (1 - tx) * ty + d11 * tx * ty;
+        if (value <= threshold) continue;
+        this.contacts++;
+        const gradX = ((d10 - d00) * (1 - ty) + (d11 - d01) * ty) / this.cellSize;
+        const gradY = ((d01 - d00) * (1 - tx) + (d11 - d10) * tx) / this.cellSize;
+        vel[at] -= gradX * push * h;
+        vel[at + 1] -= gradY * push * h;
+        // трение о соседей: скорость подтягивается к средней по ячейке
+        const flow = value > 1e-6 ? 1 / value : 0;
+        const flowX = (this.flowX[base] * (1 - tx) * (1 - ty) + this.flowX[base + 1] * tx * (1 - ty)
+          + this.flowX[base + this.cols] * (1 - tx) * ty + this.flowX[base + this.cols + 1] * tx * ty) * flow;
+        const flowY = (this.flowY[base] * (1 - tx) * (1 - ty) + this.flowY[base + 1] * tx * (1 - ty)
+          + this.flowY[base + this.cols] * (1 - tx) * ty + this.flowY[base + this.cols + 1] * tx * ty) * flow;
+        vel[at] += (flowX - vel[at]) * stick;
+        vel[at + 1] += (flowY - vel[at + 1]) * stick;
+        pos[at] = prev[at] + vel[at] * h;
+        pos[at + 1] = prev[at + 1] + vel[at + 1] * h;
+      }
+
+      for (let wire = 0; wire < wireCount; wire++) {
+        const first = offset[wire] * 2;
+        pos[first] = lab.pinX[lab.startPin[wire]];
+        pos[first + 1] = lab.pinY[lab.startPin[wire]];
+        if (pinned[wire]) {
+          const last = (offset[wire + 1] - 1) * 2;
+          pos[last] = lab.pinX[lab.tailPin[wire]];
+          pos[last + 1] = lab.pinY[lab.tailPin[wire]];
+        }
+      }
+
+      if (lab.params.exact) solveSegmentPins(lab, chains, lab.clearance, null, null);
+
+      for (let iteration = 0; iteration < 2; iteration++) {
+        for (let wire = 0; wire < wireCount; wire++) {
+          const to = offset[wire + 1] - 1;
+          const restLength = rest[wire];
+          for (let k = offset[wire]; k < to; k++) {
+            const a = k * 2;
+            const b = a + 2;
+            const sum = invMass[k] + invMass[k + 1];
+            if (sum === 0) continue;
+            const dx = pos[a] - pos[b];
+            const dy = pos[a + 1] - pos[b + 1];
+            const distance = Math.hypot(dx, dy);
+            if (distance < 1e-6) continue;
+            const delta = -(distance - restLength) / sum / distance;
+            pos[a] += dx * delta * invMass[k];
+            pos[a + 1] += dy * delta * invMass[k];
+            pos[b] -= dx * delta * invMass[k + 1];
+            pos[b + 1] -= dy * delta * invMass[k + 1];
+          }
+        }
+      }
+
+      for (let i = 0; i < chains.total; i++) {
+        if (invMass[i] === 0) continue;
+        const at = i * 2;
+        vel[at] = (pos[at] - prev[at]) / h;
+        vel[at + 1] = (pos[at + 1] - prev[at + 1]) / h;
+      }
+    }
+
+    this.peak = 0;
+    for (let i = 0; i < this.density.length; i++) if (this.density[i] > this.peak) this.peak = this.density[i];
+  },
+
+  drawBelow(context, lab) {
+    if (!lab.params.showField || !this.cols) return;
+    const scale = 1 / Math.max(1e-6, this.peak);
+    for (let iy = 0; iy < this.rows; iy++) {
+      for (let ix = 0; ix < this.cols; ix++) {
+        const value = this.density[iy * this.cols + ix] * scale;
+        if (value < 0.04) continue;
+        context.fillStyle = `rgba(248,245,237,${Math.min(0.5, value * 0.55)})`;
+        context.fillRect(this.originX + ix * this.cellSize, this.originY + iy * this.cellSize, this.cellSize, this.cellSize);
+      }
+    }
+  },
+
+  draw(context, lab) {
+    const {pos, offset} = this.chains;
+    for (let w = 0; w < lab.wires.length; w++) {
+      lab.strokeWire(pos, offset[w], offset[w + 1] - offset[w], lab.wires[w].color);
+    }
+  },
+
+  stats(lab) {
+    const stretch = maxStretch(lab, this.chains);
+    return [
+      ['растяжение', stretch.toFixed(2) + ' %', stretch > 3],
+      ['ячеек поля', String(this.cols * this.rows)],
+      ['точек в поле', String(this.contacts)],
+      ['пик плотности', this.peak.toFixed(1)]
+    ];
+  }
+};
+
+startLab({
+  solver,
+  note: 'Наклоните гравитацию — жгуты лягут друг на друга. Ни одна из остальных механик этого не умеет: там жгут видит только пины.',
+  controls: [
+    {id: 'count', label: 'жгутов', type: 'range', min: 20, max: 1000, step: 20, value: 200, rebuild: true},
+    {id: 'tilt', label: 'наклон гравитации', type: 'range', min: -80, max: 80, value: 0, format: v => v + '°'},
+    {id: 'substeps', label: 'подшагов', type: 'range', min: 1, max: 12, value: 4},
+    {id: 'gridScale', label: 'клетка поля', type: 'range', min: 0.5, max: 3, step: 0.25, value: 1, format: v => '×' + v},
+    {id: 'push', label: 'отталкивание', type: 'range', min: 0, max: 160000, step: 2000, value: 60000, format: v => (v / 1000).toFixed(0) + 'k'},
+    {id: 'stick', label: 'трение о соседей', type: 'range', min: 0, max: 0.5, step: 0.01, value: 0.1, format: v => v.toFixed(2)},
+    // Одинокий жгут даёт в своих точках плотность около 0.5 — порог должен
+    // стоять выше, иначе жгут отталкивается от собственных соседей по цепочке.
+    {id: 'threshold', label: 'порог плотности', type: 'range', min: 0.1, max: 3, step: 0.05, value: 0.7, format: v => v.toFixed(2)},
+    {id: 'pinWeight', label: 'вес пина', type: 'range', min: 1, max: 16, value: 4},
+    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 6, step: 0.1, value: 1.4, format: v => v.toFixed(1)},
+    {id: 'exact', label: 'точный контакт с пинами', type: 'toggle', value: true},
+    {id: 'showField', label: 'показать поле', type: 'toggle', value: false}
+  ]
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>04 · Углы вместо точек — лаборатория WIRES</title>
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+<canvas id="stage"></canvas>
+<header class="lab-head">
+  <a class="back" href="index.html">← лаборатория</a>
+  <h1><small>вариант 04</small>Углы вместо точек</h1>
+  <p class="lead">Состояние жгута — не координаты, а углы звеньев. Растянуться такой жгут не может в принципе: длина не ограничение, а свойство представления. Динамика идёт моментом силы тяжести на подцепочку, хвост закрывается обратной кинематикой.</p>
+</header>
+<section class="panel hud" id="hud"></section>
+<section class="panel controls" id="controls"></section>
+<p class="hint">тяните белую точку · колесо — зум · перетаскивание фона — панорама</p>
+
+<script type="module">
+import {startLab, createChains, CELL} from './lab.js';
+
+const TAU = Math.PI * 2;
+const wrap = angle => angle - TAU * Math.round(angle / TAU);
+
+const solver = {
+  chains: null,
+  segOffset: null,
+  theta: null,
+  omega: null,
+  contacts: 0,
+  drift: 0,
+
+  init(lab) {
+    const chains = createChains(lab);
+    this.chains = chains;
+    const wireCount = lab.wires.length;
+    this.segOffset = new Int32Array(wireCount + 1);
+    let total = 0;
+    for (let wire = 0; wire < wireCount; wire++) {
+      this.segOffset[wire] = total;
+      total += chains.offset[wire + 1] - chains.offset[wire] - 1;
+    }
+    this.segOffset[wireCount] = total;
+    this.segments = total;
+    this.theta = new Float32Array(total);
+    this.omega = new Float32Array(total);
+    for (let wire = 0; wire < wireCount; wire++) {
+      const first = chains.offset[wire];
+      const segs = this.segOffset[wire + 1] - this.segOffset[wire];
+      for (let s = 0; s < segs; s++) {
+        const a = (first + s) * 2;
+        this.theta[this.segOffset[wire] + s] = Math.atan2(chains.pos[a + 3] - chains.pos[a + 1], chains.pos[a + 2] - chains.pos[a]);
+      }
+    }
+  },
+
+  particleCount() {
+    return this.chains.total;
+  },
+
+  // Прямая кинематика: координаты — производная величина, их пересчитывают,
+  // а не хранят между кадрами.
+  forwardKinematics(lab, wire) {
+    const {pos, offset, rest} = this.chains;
+    const first = offset[wire];
+    const segs = this.segOffset[wire + 1] - this.segOffset[wire];
+    const step = rest[wire];
+    let x = lab.pinX[lab.startPin[wire]];
+    let y = lab.pinY[lab.startPin[wire]];
+    pos[first * 2] = x;
+    pos[first * 2 + 1] = y;
+    for (let s = 0; s < segs; s++) {
+      const angle = this.theta[this.segOffset[wire] + s];
+      x += Math.cos(angle) * step;
+      y += Math.sin(angle) * step;
+      const at = (first + s + 1) * 2;
+      pos[at] = x;
+      pos[at + 1] = y;
+    }
+  },
+
+  step(dt, lab) {
+    const substeps = lab.params.substeps | 0;
+    const h = dt / substeps;
+    const bend = lab.params.bend;
+    const drag = lab.params.drag;
+    const wireCount = lab.wires.length;
+    this.contacts = 0;
+
+    for (let sub = 0; sub < substeps; sub++) {
+      for (let wire = 0; wire < wireCount; wire++) {
+        this.forwardKinematics(lab, wire);
+        this.gravityTorque(lab, wire, h, bend, drag);
+        this.forwardKinematics(lab, wire);
+      }
+      if (lab.params.collisions) this.contacts += this.solvePins(lab, h);
+      for (let pass = 0; pass < (lab.params.ik | 0); pass++) this.closeTails(lab, h);
+    }
+
+    this.drift = 0;
+    for (let wire = 0; wire < wireCount; wire++) {
+      if (!this.chains.pinned[wire]) continue;
+      const last = (this.chains.offset[wire + 1] - 1) * 2;
+      const pin = lab.tailPin[wire];
+      const distance = Math.hypot(this.chains.pos[last] - lab.pinX[pin], this.chains.pos[last + 1] - lab.pinY[pin]);
+      if (distance > this.drift) this.drift = distance;
+    }
+  },
+
+  // Момент силы тяжести на всю подцепочку ниже сустава плюс момент инерции.
+  // И то, и другое берётся обратными накопителями за один проход: O(звеньев).
+  gravityTorque(lab, wire, h, bend, drag) {
+    const {pos, offset, rest} = this.chains;
+    const first = offset[wire];
+    const from = this.segOffset[wire];
+    const segs = this.segOffset[wire + 1] - from;
+    const gx = lab.gravity.x;
+    const gy = lab.gravity.y;
+    let sumX = 0;
+    let sumY = 0;
+    let sumSquared = 0;
+    let count = 0;
+
+    for (let s = segs - 1; s >= 0; s--) {
+      const a = (first + s) * 2;
+      const midX = (pos[a] + pos[a + 2]) / 2;
+      const midY = (pos[a + 1] + pos[a + 3]) / 2;
+      sumX += midX;
+      sumY += midY;
+      sumSquared += midX * midX + midY * midY;
+      count++;
+
+      const jointX = pos[a];
+      const jointY = pos[a + 1];
+      const armX = sumX - count * jointX;
+      const armY = sumY - count * jointY;
+      const torque = armX * gy - armY * gx;
+      const inertia = sumSquared - 2 * (jointX * sumX + jointY * sumY) + count * (jointX * jointX + jointY * jointY);
+      let acceleration = inertia > 1e-6 ? torque / inertia : 0;
+
+      // изгибная жёсткость держит форму и гасит излом на контакте
+      const index = from + s;
+      if (s > 0) acceleration += bend * wrap(this.theta[index - 1] - this.theta[index]);
+      if (s < segs - 1) acceleration += bend * wrap(this.theta[index + 1] - this.theta[index]);
+
+      this.omega[index] = (this.omega[index] + acceleration * h) * Math.max(0, 1 - drag * h);
+      this.theta[index] += this.omega[index] * h;
+    }
+    void rest;
+  },
+
+  // Контакт переводится в поворот сустава: сдвиг точки касания на глубину
+  // проникновения ищется как угол, а не как смещение координат.
+  solvePins(lab, h) {
+    const {pos, offset} = this.chains;
+    const grid = lab.grid;
+    const counts = grid.counts;
+    const items = grid.items;
+    const clearance = lab.clearance;
+    const limit = clearance * clearance;
+    const maxTurn = lab.params.maxTurn;
+    let contacts = 0;
+
+    for (let wire = 0; wire < lab.wires.length; wire++) {
+      const first = offset[wire];
+      const segs = this.segOffset[wire + 1] - this.segOffset[wire];
+      let touched = false;
+      for (let s = 0; s < segs; s++) {
+        const a = (first + s) * 2;
+        const b = a + 2;
+        const spanX = pos[b] - pos[a];
+        const spanY = pos[b + 1] - pos[a + 1];
+        const spanSquared = spanX * spanX + spanY * spanY || 1;
+        grid.range(
+          Math.min(pos[a], pos[b]) - clearance, Math.min(pos[a + 1], pos[b + 1]) - clearance,
+          Math.max(pos[a], pos[b]) + clearance, Math.max(pos[a + 1], pos[b + 1]) + clearance
+        );
+        for (let cy = grid.qy0; cy <= grid.qy1; cy++) {
+          const base = cy * grid.cols;
+          for (let cx = grid.qx0; cx <= grid.qx1; cx++) {
+            const cell = base + cx;
+            const end = counts[cell + 1];
+            for (let slot = counts[cell]; slot < end; slot++) {
+              const pin = items[slot];
+              if (lab.pinWire[pin] === wire) continue;
+              const pinX = lab.pinX[pin];
+              const pinY = lab.pinY[pin];
+              let t = ((pinX - pos[a]) * spanX + (pinY - pos[a + 1]) * spanY) / spanSquared;
+              t = t < 0 ? 0 : t > 1 ? 1 : t;
+              const touchX = pos[a] + spanX * t;
+              const touchY = pos[a + 1] + spanY * t;
+              let nx = touchX - pinX;
+              let ny = touchY - pinY;
+              const distanceSquared = nx * nx + ny * ny;
+              if (distanceSquared >= limit) continue;
+              let distance = Math.sqrt(distanceSquared);
+              if (distance > 1e-4) {
+                nx /= distance;
+                ny /= distance;
+              } else {
+                const span = Math.sqrt(spanSquared);
+                nx = -spanY / span;
+                ny = spanX / span;
+                distance = 0;
+              }
+              contacts++;
+              touched = true;
+              // поворот сустава s двигает точку касания по касательной к радиусу
+              const armX = touchX - pos[a];
+              const armY = touchY - pos[a + 1];
+              const armSquared = armX * armX + armY * armY;
+              if (armSquared < 1e-6) continue;
+              const move = (clearance - distance) * (-armY * nx + armX * ny) / armSquared;
+              const turn = Math.max(-maxTurn, Math.min(maxTurn, move));
+              const index = this.segOffset[wire] + s;
+              this.theta[index] += turn;
+              this.omega[index] += turn / h * 0.25;
+            }
+          }
+        }
+      }
+      if (touched) this.forwardKinematics(lab, wire);
+    }
+    return contacts;
+  },
+
+  // CCD: проход от кончика к началу, каждый сустав доворачивается к цели.
+  // Сустав выше по цепочке ещё не двигался, поэтому его координата валидна,
+  // и достаточно вести только положение кончика — весь проход остаётся O(звеньев).
+  closeTails(lab, h) {
+    const {pos, offset} = this.chains;
+    const gain = lab.params.ikGain;
+    for (let wire = 0; wire < lab.wires.length; wire++) {
+      if (!this.chains.pinned[wire]) continue;
+      const first = offset[wire];
+      const segs = this.segOffset[wire + 1] - this.segOffset[wire];
+      const pin = lab.tailPin[wire];
+      const targetX = lab.pinX[pin];
+      const targetY = lab.pinY[pin];
+      let tipX = pos[(first + segs) * 2];
+      let tipY = pos[(first + segs) * 2 + 1];
+      for (let s = segs - 1; s >= 0; s--) {
+        const a = (first + s) * 2;
+        const ex = tipX - pos[a];
+        const ey = tipY - pos[a + 1];
+        const tx = targetX - pos[a];
+        const ty = targetY - pos[a + 1];
+        const delta = Math.atan2(ex * ty - ey * tx, ex * tx + ey * ty) * gain;
+        if (!Number.isFinite(delta) || Math.abs(delta) < 1e-6) continue;
+        const index = this.segOffset[wire] + s;
+        this.theta[index] += delta;
+        this.omega[index] += delta / h * 0.1;
+        const cos = Math.cos(delta);
+        const sin = Math.sin(delta);
+        tipX = pos[a] + ex * cos - ey * sin;
+        tipY = pos[a + 1] + ex * sin + ey * cos;
+      }
+      this.forwardKinematics(lab, wire);
+    }
+  },
+
+  draw(context, lab) {
+    const {pos, offset} = this.chains;
+    for (let w = 0; w < lab.wires.length; w++) {
+      lab.strokeWire(pos, offset[w], offset[w + 1] - offset[w], lab.wires[w].color);
+    }
+  },
+
+  stats(lab) {
+    const bytes = this.segments * 8;
+    return [
+      ['растяжение', 'нет'],
+      ['уход хвоста', this.drift.toFixed(2) + ' px', this.drift > lab.cell * 0.25],
+      ['контактов', String(this.contacts)],
+      ['звеньев', String(this.segments)],
+      ['состояние', (bytes / 1024).toFixed(1) + ' КБ']
+    ];
+  }
+};
+
+startLab({
+  solver,
+  note: 'Динамическое состояние — два числа на звено: угол и угловая скорость. Позиционному солверу нужны четыре, и он всё равно не гарантирует длину.',
+  controls: [
+    {id: 'count', label: 'жгутов', type: 'range', min: 20, max: 1000, step: 20, value: 160, rebuild: true},
+    {id: 'substeps', label: 'подшагов', type: 'range', min: 1, max: 12, value: 4},
+    {id: 'bend', label: 'изгибная жёсткость', type: 'range', min: 0, max: 40, step: 1, value: 8},
+    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 8, step: 0.1, value: 2.2, format: v => v.toFixed(1)},
+    {id: 'ik', label: 'проходов IK', type: 'range', min: 0, max: 4, value: 2},
+    {id: 'ikGain', label: 'усиление IK', type: 'range', min: 0.1, max: 1, step: 0.05, value: 0.5, format: v => v.toFixed(2)},
+    {id: 'maxTurn', label: 'предел довората', type: 'range', min: 0.01, max: 0.4, step: 0.01, value: 0.12, format: v => v.toFixed(2)},
+    {id: 'collisions', label: 'коллизии с пинами', type: 'toggle', value: true}
+  ]
+});
+</script>
+</body>
+</html>

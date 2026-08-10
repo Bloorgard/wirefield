@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>01 · XPBD и подшаги — лаборатория WIRES</title>
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+<canvas id="stage"></canvas>
+<header class="lab-head">
+  <a class="back" href="index.html">← лаборатория</a>
+  <h1><small>вариант 01</small>XPBD и подшаги</h1>
+  <p class="lead">Тот же позиционный солвер, но время режется на подшаги, а не итерации. Один проход ограничений на подшаг сходится сильно лучше, чем десять проходов на кадр, и жёсткость перестаёт зависеть от их числа. Сравните: 1×8 против 8×1 при одинаковой цене.</p>
+</header>
+<section class="panel hud" id="hud"></section>
+<section class="panel controls" id="controls"></section>
+<p class="hint">тяните белую точку · колесо — зум · перетаскивание фона — панорама</p>
+
+<script type="module">
+import {startLab, createChains, maxStretch, solveSegmentPins} from './lab.js';
+
+const solver = {
+  chains: null,
+  contacts: 0,
+  contactNormal: null,
+  contactFlag: null,
+
+  init(lab) {
+    this.chains = createChains(lab);
+    this.contactNormal = new Float32Array(this.chains.total * 2);
+    this.contactFlag = new Uint8Array(this.chains.total);
+  },
+
+  particleCount() {
+    return this.chains.total;
+  },
+
+  step(dt, lab) {
+    const chains = this.chains;
+    const {pos, prev, vel, invMass, offset, rest, pinned} = chains;
+    const substeps = lab.params.substeps | 0;
+    const iterations = lab.params.iterations | 0;
+    const h = dt / substeps;
+    // XPBD: податливость нормируется на квадрат шага, поэтому жёсткость
+    // не зависит ни от dt, ни от числа итераций — только от compliance.
+    const compliance = Math.pow(10, lab.params.compliance) / (h * h);
+    const drag = lab.params.drag;
+    const friction = lab.params.friction;
+    const collisions = lab.params.collisions;
+    const clearance = lab.clearance;
+    const gravityX = lab.gravity.x;
+    const gravityY = lab.gravity.y;
+    const wireCount = lab.wires.length;
+    this.contacts = 0;
+
+    for (let sub = 0; sub < substeps; sub++) {
+      // предсказание
+      for (let i = 0; i < chains.total; i++) {
+        if (invMass[i] === 0) continue;
+        const at = i * 2;
+        vel[at] += gravityX * h;
+        vel[at + 1] += gravityY * h;
+        const decay = Math.max(0, 1 - drag * h);
+        vel[at] *= decay;
+        vel[at + 1] *= decay;
+        prev[at] = pos[at];
+        prev[at + 1] = pos[at + 1];
+        pos[at] += vel[at] * h;
+        pos[at + 1] += vel[at + 1] * h;
+      }
+
+      // кинематические концы
+      for (let w = 0; w < wireCount; w++) {
+        const first = offset[w] * 2;
+        pos[first] = lab.pinX[lab.startPin[w]];
+        pos[first + 1] = lab.pinY[lab.startPin[w]];
+        if (pinned[w]) {
+          const last = (offset[w + 1] - 1) * 2;
+          pos[last] = lab.pinX[lab.tailPin[w]];
+          pos[last + 1] = lab.pinY[lab.tailPin[w]];
+        }
+      }
+
+      this.contactFlag.fill(0);
+
+      for (let iteration = 0; iteration < iterations; iteration++) {
+        // Контакты идут первыми, длина — последней. Так проекция длины всегда
+        // говорит последнее слово, и жгут не рвётся на пине; за непроникновение
+        // отвечает малость подшага, а не число итераций.
+        if (collisions) this.contacts += solveSegmentPins(lab, chains, clearance, this.contactFlag, this.contactNormal);
+        // расстояния, Гаусс-Зейдель по одному жгуту
+        for (let w = 0; w < wireCount; w++) {
+          const from = offset[w];
+          const to = offset[w + 1] - 1;
+          const restLength = rest[w];
+          for (let k = from; k < to; k++) {
+            const a = k * 2;
+            const b = a + 2;
+            const wa = invMass[k];
+            const wb = invMass[k + 1];
+            const sum = wa + wb;
+            if (sum === 0) continue;
+            const dx = pos[a] - pos[b];
+            const dy = pos[a + 1] - pos[b + 1];
+            const distance = Math.hypot(dx, dy);
+            if (distance < 1e-6) continue;
+            const delta = -(distance - restLength) / (sum + compliance);
+            const nx = dx / distance;
+            const ny = dy / distance;
+            pos[a] += nx * delta * wa;
+            pos[a + 1] += ny * delta * wa;
+            pos[b] -= nx * delta * wb;
+            pos[b + 1] -= ny * delta * wb;
+          }
+        }
+      }
+
+      // скорости из перемещения — база XPBD
+      for (let i = 0; i < chains.total; i++) {
+        if (invMass[i] === 0) continue;
+        const at = i * 2;
+        vel[at] = (pos[at] - prev[at]) / h;
+        vel[at + 1] = (pos[at + 1] - prev[at + 1]) / h;
+        if (!this.contactFlag[i]) continue;
+        // трение и отскок отдельным проходом по скорости, а не внутри проекции
+        const nx = this.contactNormal[at];
+        const ny = this.contactNormal[at + 1];
+        const normal = vel[at] * nx + vel[at + 1] * ny;
+        const tangentX = vel[at] - normal * nx;
+        const tangentY = vel[at + 1] - normal * ny;
+        const keep = 1 - friction;
+        vel[at] = tangentX * keep + nx * Math.max(0, normal) * 0.3;
+        vel[at + 1] = tangentY * keep + ny * Math.max(0, normal) * 0.3;
+      }
+    }
+  },
+
+  draw(context, lab) {
+    const {pos, offset} = this.chains;
+    for (let w = 0; w < lab.wires.length; w++) {
+      lab.strokeWire(pos, offset[w], offset[w + 1] - offset[w], lab.wires[w].color);
+    }
+  },
+
+  stats(lab) {
+    const stretch = maxStretch(lab, this.chains);
+    return [
+      ['растяжение', stretch.toFixed(2) + ' %', stretch > 3],
+      ['контактов', String(this.contacts)],
+      ['проходов', String(lab.params.substeps * lab.params.iterations)]
+    ];
+  }
+};
+
+startLab({
+  solver,
+  note: 'Бюджет солвера — это подшаги × итерации. При равном бюджете подшаги дают меньшее растяжение и меньшее численное демпфирование, чем итерации.',
+  controls: [
+    {id: 'count', label: 'жгутов', type: 'range', min: 20, max: 1000, step: 20, value: 160, rebuild: true},
+    {id: 'substeps', label: 'подшагов', type: 'range', min: 1, max: 16, value: 8},
+    {id: 'iterations', label: 'итераций на подшаг', type: 'range', min: 1, max: 16, value: 1},
+    {id: 'compliance', label: 'податливость', type: 'range', min: -9, max: -4, step: 0.25, value: -8, format: v => '1e' + v},
+    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 6, step: 0.1, value: 1.4, format: v => v.toFixed(1)},
+    {id: 'friction', label: 'трение о пин', type: 'range', min: 0, max: 1, step: 0.05, value: 0.35, format: v => v.toFixed(2)},
+    {id: 'collisions', label: 'коллизии с пинами', type: 'toggle', value: true}
+  ]
+});
+</script>
+</body>
+</html>
