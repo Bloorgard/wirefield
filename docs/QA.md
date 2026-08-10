@@ -50,7 +50,7 @@ npm run test:unit
 npm run test:smoke
 ```
 
-Текущий набор содержит 35 сценариев. Он проверяет стартовый рисунок, keyboard/undo, Add/Delete, границу 1000, `.wires`, storage recovery, mobile gestures, point selection, group drag, layer reorder, zoom, toolbar, фоны, point modes, grid semantics, layout geometry, sensor gravity и collision behavior.
+Текущий набор содержит 36 сценариев. Он проверяет стартовый рисунок, keyboard/undo, Add/Delete, границу 1000, `.wires`, storage recovery, mobile gestures, point selection, group drag, layer reorder, zoom, toolbar, фоны, point modes, grid semantics, layout geometry, компактную карточку слоя на мобильном, sensor gravity и collision behavior.
 
 Отдельный accessibility scenario проверяет:
 
@@ -64,7 +64,7 @@ npm run test:smoke
 Успешный прогон заканчивается:
 
 ```text
-35/35 checks passed
+36/36 checks passed
 ```
 
 ## Collision benchmark
