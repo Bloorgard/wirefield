@@ -222,7 +222,7 @@ async function main() {
       assert(collapsed.height >= 145 && collapsed.height <= 170, `collapsed panel is ${collapsed.height}px`);
       assert(collapsed.button !== 'none', 'mobile layers button is hidden');
       assert(collapsed.list === 'none', 'mobile layer list is open by default');
-      assert(!collapsed.quick && !collapsed.legacy, 'legacy selected-wire block is still present');
+      assert(collapsed.quick && !collapsed.legacy, 'compact layer card is missing or the legacy inspector came back');
       assert(collapsed.toolDirection === 'column' && collapsed.actionDirection === 'column', 'mobile top menus are not stacked');
       const expanded = await evaluate(`(()=>{const b=document.querySelector('#layersToggle');b.click();const list=document.querySelector('#list'),side=document.querySelector('.side'),sr=side.getBoundingClientRect(),lr=list.getBoundingClientRect();return {open:side.classList.contains('layers-open'),list:getComputedStyle(list).display,fullWidth:lr.width>sr.width-30}})()`);
       assert(expanded.open && expanded.list === 'block' && expanded.fullWidth, 'mobile layer panel did not open full width');
@@ -447,6 +447,27 @@ async function main() {
       assert(lengthResult.controls === 3, `expected 3 length controls, got ${lengthResult.controls}`);
       pass('mobile length controls', 'length and geometry update without canvas shake');
     } catch (error) { fail('mobile length controls', error); }
+
+    try {
+      await reset();
+      const compact = await evaluate(`(async()=>{const box=document.querySelector('#compactLayerControls'),title=document.querySelector('#compactLayerTitle'),wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+        const rows=[...box.querySelectorAll('.length-control,.layer-swatches,.layer-tools')].map(row=>({height:Math.round(row.getBoundingClientRect().height),columns:getComputedStyle(row).gridTemplateColumns.split(' ').length}));
+        const id=document.querySelector('.item.primary').dataset.id,read=()=>JSON.parse(localStorage.getItem('wires-v2')).wires.find(wire=>wire.id===id).length;
+        const before=read();box.querySelector('.length-up').click();await wait(140);const after=read();
+        const side=document.querySelector('.side').getBoundingClientRect(),card=box.getBoundingClientRect();
+        const actions=getComputedStyle(document.querySelector('.objects-actions')).display,sortHidden=document.querySelector('#sortLayers').offsetParent===null;
+        document.querySelector('#layersToggle').click();await wait(140);const hiddenWhileListOpen=box.offsetParent===null;document.querySelector('#layersToggle').click();await wait(100);
+        const scene=document.querySelector('#scene'),rect=scene.getBoundingClientRect(),tap=type=>scene.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:230,pointerType:'touch',button:0,buttons:type==='pointerdown'?1:0,clientX:rect.left+20,clientY:rect.top+330}));
+        tap('pointerdown');tap('pointerup');await wait(140);
+        return {rows,before,after,title:title.textContent,hint:box.querySelector('.compact-hint')?.textContent||null,cardAfterDeselect:!!box.querySelector('.length-control'),insidePanel:card.bottom<=side.bottom+.5,insideViewport:card.right<=innerWidth+.5,actions,sortHidden,hiddenWhileListOpen}})()`);
+      assert(compact.rows.length === 3 && compact.rows.every(row => row.height === 34 && row.columns === 6), `compact card rows are ${JSON.stringify(compact.rows)}`);
+      assert(compact.after === compact.before + 0.5, `compact length control did not update the model: ${compact.before} → ${compact.after}`);
+      assert(compact.insidePanel && compact.insideViewport, 'compact card overflows the panel or the screen');
+      assert(compact.actions === 'none' && compact.sortHidden, 'legacy mobile panel actions are still visible');
+      assert(compact.hiddenWhileListOpen, 'compact card stays visible while the layer list is open');
+      assert(!compact.cardAfterDeselect && compact.hint === 'выберите жгут на холсте', `deselected panel shows ${JSON.stringify(compact.hint)}`);
+      pass('mobile compact layer card', `three 34px six-column rows; length ${compact.before} → ${compact.after}; ${compact.title}`);
+    } catch (error) { fail('mobile compact layer card', error); }
 
     try {
       await setViewport(390, 844, true);
