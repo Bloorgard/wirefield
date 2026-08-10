@@ -36,7 +36,8 @@ export function pinCells(wires, excludeIds = new Set()) {
 export function nearestFreeIn(wires, x, y, excludeId = null) {
   x = Math.max(0, Math.round(x));
   y = Math.max(0, Math.round(y));
-  const occupied = (px, py) => wires.some(wire => wire.id !== excludeId && wire.x === px && wire.y === py);
+  const taken = pinCells(wires, new Set(excludeId === null ? [] : [excludeId]));
+  const occupied = (px, py) => taken.has(`${px},${py}`);
   if (!occupied(x, y)) return {x, y};
   const queue = [[x, y]];
   const seen = new Set([`${x},${y}`]);

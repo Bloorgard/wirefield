@@ -71,3 +71,20 @@ test('nearestFreeIn uses deterministic right-first breadth search', () => {
   assert.deepEqual(nearestFreeIn(wires, 2, 2), {x: 2, y: 3});
   assert.deepEqual(nearestFreeIn(wires, -2, -3), {x: 0, y: 0});
 });
+
+test('nearestFreeIn treats pinned tails as occupied cells', () => {
+  const wires = [{id: 'A', x: 5, y: 5, length: 5, color: '#102cff', endX: 8, endY: 5}];
+  assert.deepEqual(nearestFreeIn(wires, 8, 5), {x: 9, y: 5});
+  assert.deepEqual(nearestFreeIn(wires, 8, 5, 'A'), {x: 8, y: 5});
+});
+
+test('normalizeModel keeps starts off foreign pinned tails', () => {
+  const normalized = normalizeModel({
+    version: 1,
+    wires: [
+      {id: 'A', x: 5, y: 5, length: 5, color: '#102cff', endX: 8, endY: 5},
+      {id: 'B', x: 8, y: 5, length: 2, color: '#102cff'}
+    ]
+  }, fallback);
+  assert.deepEqual([...pinCells(normalized.wires)].sort(), ['5,5', '8,5', '9,5']);
+});
