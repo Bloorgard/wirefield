@@ -218,7 +218,30 @@ export class PinGrid {
 // точке направлена вдоль цепочки, и жгут выталкивает сам себя вдоль своей оси
 // вместо того, чтобы обогнуть препятствие. У отрезка вектор до ближайшей точки
 // перпендикулярен ему по построению, поэтому пин всегда толкает жгут вбок.
-export function solveSegmentPins(lab, chains, clearance, contactFlag, contactNormal, maxPush = clearance * 0.3) {
+//
+// `prev` обязателен для солверов, которые потом берут скорость как `(pos − prev)/h`.
+// Выталкивание — это исправление проникновения, а не удар: если сдвинуть только
+// `pos`, поправка в 14 px на подшаге длиной 1/480 c превратится в 6700 px/с и
+// начнёт накачивать сцену энергией. Сдвигая `prev` на тот же вектор, мы делаем
+// контакт нейтральным по скорости, а отскок и трение оставляем отдельному
+// проходу, где ими можно управлять. Ровно этому служит `point.ox += dx` в
+// `src/collision.js` — строчка, которая выглядит как смешение слоёв, а на деле
+// является здесь единственной защитой от накачки.
+// `slop` и `beta` не менее важны, чем `prev`. Жгут, лёгший ровно на границу
+// зазора, без них получает поправку в доли пикселя каждый кадр: скорости она не
+// добавляет, но переносит жгут вверх против тяжести — и качает его через
+// позицию, как параметрический маятник. Допуск `slop` разрешает мизерное
+// проникновение и даёт контакту наконец успокоиться, `beta` растягивает
+// исправление на несколько кадров. В `src/collision.js` есть аналог `beta`
+// (`correction`), но допуска нет.
+export function solveSegmentPins(lab, chains, options) {
+  const clearance = options.clearance;
+  const contactFlag = options.flag || null;
+  const contactNormal = options.normal || null;
+  const maxPush = options.maxPush ?? clearance * 0.3;
+  const prev = options.prev || null;
+  const slop = options.slop ?? lab.cell * 0.04;
+  const beta = options.beta ?? 0.4;
   const {pos, invMass, offset} = chains;
   const grid = lab.grid;
   const counts = grid.counts;
@@ -276,28 +299,42 @@ export function solveSegmentPins(lab, chains, clearance, contactFlag, contactNor
             const weightB = invB > 0 ? t : 0;
             const denominator = weightA * weightA + weightB * weightB;
             if (denominator <= 1e-8) continue;
-            const push = clearance - distance;
+            contacts++;
+            // Флаг ставится по факту касания, а не по факту сдвига: скоростное
+            // ограничение должно работать и внутри допуска, иначе точка внутри
+            // slop свободно разгоняется в пин и вылетает обратно рывком.
+            if (contactFlag) {
+              if (weightA > 0) {
+                contactFlag[k] = 1;
+                contactNormal[a] = nx;
+                contactNormal[a + 1] = ny;
+              }
+              if (weightB > 0) {
+                contactFlag[k + 1] = 1;
+                contactNormal[b] = nx;
+                contactNormal[b + 1] = ny;
+              }
+            }
+            const push = Math.max(0, clearance - distance - slop) * beta;
+            if (push <= 0) continue;
             if (weightA > 0) {
               const step = Math.min(maxPush, push * weightA / denominator);
               pos[a] += nx * step;
               pos[a + 1] += ny * step;
-              if (contactFlag) {
-                contactFlag[k] = 1;
-                contactNormal[a] = nx;
-                contactNormal[a + 1] = ny;
+              if (prev) {
+                prev[a] += nx * step;
+                prev[a + 1] += ny * step;
               }
             }
             if (weightB > 0) {
               const step = Math.min(maxPush, push * weightB / denominator);
               pos[b] += nx * step;
               pos[b + 1] += ny * step;
-              if (contactFlag) {
-                contactFlag[k + 1] = 1;
-                contactNormal[b] = nx;
-                contactNormal[b + 1] = ny;
+              if (prev) {
+                prev[b] += nx * step;
+                prev[b + 1] += ny * step;
               }
             }
-            contacts++;
           }
         }
       }

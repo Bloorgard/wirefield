@@ -189,29 +189,9 @@ const solver = {
         }
       }
 
-      if (lab.params.exact) solveSegmentPins(lab, chains, lab.clearance, null, null);
-
-      for (let iteration = 0; iteration < 2; iteration++) {
-        for (let wire = 0; wire < wireCount; wire++) {
-          const to = offset[wire + 1] - 1;
-          const restLength = rest[wire];
-          for (let k = offset[wire]; k < to; k++) {
-            const a = k * 2;
-            const b = a + 2;
-            const sum = invMass[k] + invMass[k + 1];
-            if (sum === 0) continue;
-            const dx = pos[a] - pos[b];
-            const dy = pos[a + 1] - pos[b + 1];
-            const distance = Math.hypot(dx, dy);
-            if (distance < 1e-6) continue;
-            const delta = -(distance - restLength) / sum / distance;
-            pos[a] += dx * delta * invMass[k];
-            pos[a + 1] += dy * delta * invMass[k];
-            pos[b] -= dx * delta * invMass[k + 1];
-            pos[b + 1] -= dy * delta * invMass[k + 1];
-          }
-        }
-      }
+      // Фаза 1 — длина как динамика.
+      this.solveLength(lab, false);
+      this.solveLength(lab, false);
 
       for (let i = 0; i < chains.total; i++) {
         if (invMass[i] === 0) continue;
@@ -219,10 +199,50 @@ const solver = {
         vel[at] = (pos[at] - prev[at]) / h;
         vel[at + 1] = (pos[at + 1] - prev[at + 1]) / h;
       }
+
+    }
+
+    // Точный контакт с пином — один раз на кадр, а не на подшаг. Это чистая
+    // позиционная поправка поверх мягкого поля: скорости она не меняет, и
+    // повторять её на каждом подшаге незачем — а стоит она дороже всего
+    // остального шага вместе взятого.
+    if (lab.params.exact) {
+      solveSegmentPins(lab, chains, {clearance: lab.clearance, prev});
+      this.solveLength(lab, true);
     }
 
     this.peak = 0;
     for (let i = 0; i < this.density.length; i++) if (this.density[i] > this.peak) this.peak = this.density[i];
+  },
+
+  solveLength(lab, withPrev) {
+    const {pos, prev, invMass, offset, rest} = this.chains;
+    for (let wire = 0; wire < lab.wires.length; wire++) {
+      const to = offset[wire + 1] - 1;
+      const restLength = rest[wire];
+      for (let k = offset[wire]; k < to; k++) {
+        const a = k * 2;
+        const b = a + 2;
+        const sum = invMass[k] + invMass[k + 1];
+        if (sum === 0) continue;
+        const dx = pos[a] - pos[b];
+        const dy = pos[a + 1] - pos[b + 1];
+        const distance = Math.hypot(dx, dy);
+        if (distance < 1e-6) continue;
+        const delta = -(distance - restLength) / sum / distance;
+        const shiftX = dx * delta;
+        const shiftY = dy * delta;
+        pos[a] += shiftX * invMass[k];
+        pos[a + 1] += shiftY * invMass[k];
+        pos[b] -= shiftX * invMass[k + 1];
+        pos[b + 1] -= shiftY * invMass[k + 1];
+        if (!withPrev) continue;
+        prev[a] += shiftX * invMass[k];
+        prev[a + 1] += shiftY * invMass[k];
+        prev[b] -= shiftX * invMass[k + 1];
+        prev[b + 1] -= shiftY * invMass[k + 1];
+      }
+    }
   },
 
   drawBelow(context, lab) {

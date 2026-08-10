@@ -95,8 +95,8 @@ const solver = {
         this.gravityTorque(lab, wire, h, bend, drag);
         this.forwardKinematics(lab, wire);
       }
-      if (lab.params.collisions) this.contacts += this.solvePins(lab, h);
-      for (let pass = 0; pass < (lab.params.ik | 0); pass++) this.closeTails(lab, h);
+      if (lab.params.collisions) this.contacts += this.solvePins(lab);
+      for (let pass = 0; pass < (lab.params.ik | 0); pass++) this.closeTails(lab);
     }
 
     this.drift = 0;
@@ -112,7 +112,7 @@ const solver = {
   // Момент силы тяжести на всю подцепочку ниже сустава плюс момент инерции.
   // И то, и другое берётся обратными накопителями за один проход: O(звеньев).
   gravityTorque(lab, wire, h, bend, drag) {
-    const {pos, offset, rest} = this.chains;
+    const {pos, offset} = this.chains;
     const first = offset[wire];
     const from = this.segOffset[wire];
     const segs = this.segOffset[wire + 1] - from;
@@ -148,23 +148,23 @@ const solver = {
       this.omega[index] = (this.omega[index] + acceleration * h) * Math.max(0, 1 - drag * h);
       this.theta[index] += this.omega[index] * h;
     }
-    void rest;
   },
 
   // Контакт переводится в поворот сустава: сдвиг точки касания на глубину
   // проникновения ищется как угол, а не как смещение координат.
-  solvePins(lab, h) {
+  solvePins(lab) {
     const {pos, offset} = this.chains;
     const grid = lab.grid;
     const counts = grid.counts;
     const items = grid.items;
     const clearance = lab.clearance;
     const limit = clearance * clearance;
-    const maxTurn = lab.params.maxTurn;
+    const maxShift = lab.params.maxShift;
     let contacts = 0;
 
     for (let wire = 0; wire < lab.wires.length; wire++) {
       const first = offset[wire];
+      const step = this.chains.rest[wire];
       const segs = this.segOffset[wire + 1] - this.segOffset[wire];
       let touched = false;
       for (let s = 0; s < segs; s++) {
@@ -212,11 +212,27 @@ const solver = {
               const armY = touchY - pos[a + 1];
               const armSquared = armX * armX + armY * armY;
               if (armSquared < 1e-6) continue;
-              const move = (clearance - distance) * (-armY * nx + armX * ny) / armSquared;
-              const turn = Math.max(-maxTurn, Math.min(maxTurn, move));
               const index = this.segOffset[wire] + s;
-              this.theta[index] += turn;
-              this.omega[index] += turn / h * 0.25;
+              // Скоростное ограничение. `lever` — насколько быстро растёт зазор
+              // на единицу угловой скорости; если он убывает, звено едет в пин,
+              // и вращение надо остановить. Без этого позиционная поправка
+              // борется с динамикой каждый кадр, и жгут дребезжит. В угловом
+              // представлении скорость сустава одномерна, поэтому остановить
+              // движение в пин можно только вместе со скольжением вдоль него —
+              // это цена представления, а не недоделка.
+              const lever = (-armY * nx + armX * ny) / armSquared;
+              if (this.omega[index] * lever < 0) this.omega[index] = 0;
+
+              // Допуск и релаксация — по той же причине, что и в позиционных
+              // солверах: без них звено на границе зазора доворачивается каждый
+              // кадр и раскачивает себя через положение.
+              const depth = Math.max(0, clearance - distance - lab.cell * 0.04) * 0.4;
+              if (depth <= 0) continue;
+              // Предел ставится не на угол, а на сдвиг кончика. Поворот сустава
+              // двигает весь хвост: 0.1 радиана у основания десятизвенного
+              // жгута — это 30 px на конце. Ограничивать надо то, что видно.
+              const limitTurn = maxShift / Math.max(1, (segs - s) * step);
+              this.theta[index] += Math.max(-limitTurn, Math.min(limitTurn, depth * lever));
             }
           }
         }
@@ -229,7 +245,7 @@ const solver = {
   // CCD: проход от кончика к началу, каждый сустав доворачивается к цели.
   // Сустав выше по цепочке ещё не двигался, поэтому его координата валидна,
   // и достаточно вести только положение кончика — весь проход остаётся O(звеньев).
-  closeTails(lab, h) {
+  closeTails(lab) {
     const {pos, offset} = this.chains;
     const gain = lab.params.ikGain;
     for (let wire = 0; wire < lab.wires.length; wire++) {
@@ -249,9 +265,9 @@ const solver = {
         const ty = targetY - pos[a + 1];
         const delta = Math.atan2(ex * ty - ey * tx, ex * tx + ey * ty) * gain;
         if (!Number.isFinite(delta) || Math.abs(delta) < 1e-6) continue;
-        const index = this.segOffset[wire] + s;
-        this.theta[index] += delta;
-        this.omega[index] += delta / h * 0.1;
+        // Доворот от IK — это исправление положения, а не удар: в `omega` он
+        // не идёт, иначе замыкание хвоста само раскачивает жгут.
+        this.theta[this.segOffset[wire] + s] += delta;
         const cos = Math.cos(delta);
         const sin = Math.sin(delta);
         tipX = pos[a] + ex * cos - ey * sin;
@@ -287,10 +303,10 @@ startLab({
     {id: 'count', label: 'жгутов', type: 'range', min: 20, max: 1000, step: 20, value: 160, rebuild: true},
     {id: 'substeps', label: 'подшагов', type: 'range', min: 1, max: 12, value: 4},
     {id: 'bend', label: 'изгибная жёсткость', type: 'range', min: 0, max: 40, step: 1, value: 8},
-    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 8, step: 0.1, value: 2.2, format: v => v.toFixed(1)},
+    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 10, step: 0.1, value: 3.7, format: v => v.toFixed(1)},
     {id: 'ik', label: 'проходов IK', type: 'range', min: 0, max: 4, value: 2},
     {id: 'ikGain', label: 'усиление IK', type: 'range', min: 0.1, max: 1, step: 0.05, value: 0.5, format: v => v.toFixed(2)},
-    {id: 'maxTurn', label: 'предел довората', type: 'range', min: 0.01, max: 0.4, step: 0.01, value: 0.12, format: v => v.toFixed(2)},
+    {id: 'maxShift', label: 'предел сдвига хвоста', type: 'range', min: 0.5, max: 20, step: 0.5, value: 4, format: v => v.toFixed(1) + ' px'},
     {id: 'collisions', label: 'коллизии с пинами', type: 'toggle', value: true}
   ]
 });

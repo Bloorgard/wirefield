@@ -37,8 +37,8 @@ const solver = {
 
   // Проход FTL: точка k притягивается на расстояние rest к уже поставленной k-1.
   // Поправка запоминается — из неё потом восстанавливается скорость.
-  forward(wire, rest, record) {
-    const {pos, offset} = this.chains;
+  forward(wire, rest, record, prevToo) {
+    const {pos, prev, offset} = this.chains;
     const to = this.chains.offset[wire + 1];
     for (let k = offset[wire] + 1; k < to; k++) {
       const a = (k - 1) * 2;
@@ -52,22 +52,32 @@ const solver = {
         this.correction[b] = x - pos[b];
         this.correction[b + 1] = y - pos[b + 1];
       }
+      if (prevToo) {
+        prev[b] += x - pos[b];
+        prev[b + 1] += y - pos[b + 1];
+      }
       pos[b] = x;
       pos[b + 1] = y;
     }
   },
 
   // Обратный проход от закреплённого хвоста — вторая половина FABRIK.
-  backward(wire, rest) {
-    const {pos, offset} = this.chains;
+  backward(wire, rest, prevToo) {
+    const {pos, prev, offset} = this.chains;
     for (let k = offset[wire + 1] - 2; k >= offset[wire]; k--) {
       const a = (k + 1) * 2;
       const b = k * 2;
       const dx = pos[b] - pos[a];
       const dy = pos[b + 1] - pos[a + 1];
       const distance = Math.hypot(dx, dy) || 1;
-      pos[b] = pos[a] + dx / distance * rest;
-      pos[b + 1] = pos[a + 1] + dy / distance * rest;
+      const x = pos[a] + dx / distance * rest;
+      const y = pos[a + 1] + dy / distance * rest;
+      if (prevToo) {
+        prev[b] += x - pos[b];
+        prev[b + 1] += y - pos[b + 1];
+      }
+      pos[b] = x;
+      pos[b + 1] = y;
     }
   },
 
@@ -112,29 +122,17 @@ const solver = {
       this.correction.fill(0);
       this.anchors(lab);
 
+      // Фаза 1 — динамика.
       for (let wire = 0; wire < wireCount; wire++) {
         if (pinned[wire]) {
           // Два конца — это уже FABRIK: назад от хвоста, вперёд от старта.
           for (let pass = 0; pass < passes; pass++) {
-            this.backward(wire, rest[wire]);
+            this.backward(wire, rest[wire], false);
             this.anchorOne(lab, wire);
-            this.forward(wire, rest[wire], pass === passes - 1);
+            this.forward(wire, rest[wire], pass === passes - 1, false);
           }
         } else {
-          this.forward(wire, rest[wire], true);
-        }
-      }
-
-      if (lab.params.collisions) {
-        this.contacts += solveSegmentPins(lab, chains, lab.clearance, null, null);
-        // после разведения контактов длина восстанавливается тем же проходом
-        this.anchors(lab);
-        for (let wire = 0; wire < wireCount; wire++) {
-          if (pinned[wire]) {
-            this.backward(wire, rest[wire]);
-            this.anchorOne(lab, wire);
-          }
-          this.forward(wire, rest[wire], false);
+          this.forward(wire, rest[wire], true, false);
         }
       }
 
@@ -150,6 +148,23 @@ const solver = {
           vel[at] = (pos[at] - prev[at]) / h - restore * backX / h;
           vel[at + 1] = (pos[at + 1] - prev[at + 1]) / h - restore * backY / h;
         }
+      }
+
+    }
+
+    // Фаза 2 — контакты, уже после скорости и целиком нейтрально к ней: и
+    // выталкивание, и восстанавливающий проход двигают `prev` вместе с `pos`.
+    // Идёт раз в кадр: это позиционная поправка, дробить её по подшагам незачем,
+    // а стоит она дороже всей динамики.
+    if (lab.params.collisions) {
+      this.contacts = solveSegmentPins(lab, chains, {clearance: lab.clearance, prev});
+      this.anchors(lab);
+      for (let wire = 0; wire < wireCount; wire++) {
+        if (pinned[wire]) {
+          this.backward(wire, rest[wire], true);
+          this.anchorOne(lab, wire);
+        }
+        this.forward(wire, rest[wire], false, true);
       }
     }
   },
@@ -184,7 +199,7 @@ const solver = {
       ['растяжение', stretch.toFixed(3) + ' %', stretch > 3],
       ['уход хвоста', drift.toFixed(2) + ' px', drift > lab.cell * 0.25],
       ['контактов', String(this.contacts)],
-      ['проходов', String(lab.params.substeps * (lab.params.collisions ? 2 : 1))]
+      ['проходов', String(lab.params.substeps * lab.params.passes + (lab.params.collisions ? 1 : 0))]
     ];
   }
 };
@@ -197,7 +212,7 @@ startLab({
     {id: 'substeps', label: 'подшагов', type: 'range', min: 1, max: 12, value: 4},
     {id: 'passes', label: 'проходов FABRIK', type: 'range', min: 1, max: 6, value: 2},
     {id: 'restore', label: 'возврат импульса', type: 'range', min: 0, max: 1, step: 0.05, value: 0.85, format: v => v.toFixed(2)},
-    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 6, step: 0.1, value: 1.2, format: v => v.toFixed(1)},
+    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 8, step: 0.1, value: 3.7, format: v => v.toFixed(1)},
     {id: 'collisions', label: 'коллизии с пинами', type: 'toggle', value: true}
   ]
 });
