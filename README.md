@@ -46,7 +46,7 @@ npm run test:smoke
 npm run benchmark:collision
 ```
 
-Unit-тесты проверяют модель, `.wires` parser/serializer и spatial collision index. Smoke harness запускает временный Chromium через CDP и не затрагивает пользовательский профиль.
+Unit-тесты проверяют модель, `.wires` parser/serializer и spatial collision index. Smoke harness запускает временный Chromium через CDP и не затрагивает пользовательский профиль. Браузер ищется в стандартных местах macOS и Linux; другой путь задаётся через `CHROME_BIN`.
 
 ## Структура
 

@@ -12,7 +12,7 @@ npm test
 - Python 3;
 - Chromium или Google Chrome.
 
-Другой browser binary:
+Harness сам ищет Chromium в стандартных местах macOS и Linux. Другой browser binary:
 
 ```bash
 CHROME_BIN=/path/to/chrome npm test
@@ -32,16 +32,17 @@ WIRES_URL=https://wires.pustota.link/ npm run test:smoke
 npm run test:unit
 ```
 
-Текущий набор содержит 11 тестов для:
+Текущий набор содержит 14 тестов для:
 
 - нормализации и legacy migration;
 - model limits, IDs, координат и занятых клеток;
 - tail minimum и pin cells;
+- разведения стартов и закреплённых хвостов по разным клеткам;
 - `.wires` round-trip и строгого parser;
 - лимитов файла и числа жгутов;
 - spatial index, порядка кандидатов и collision response.
 
-Успешный прогон заканчивается `11 tests passed` в TAP-отчёте.
+Успешный прогон заканчивается `14 tests passed` в TAP-отчёте.
 
 ## Browser smoke
 
@@ -49,7 +50,7 @@ npm run test:unit
 npm run test:smoke
 ```
 
-Текущий набор содержит 34 сценария. Он проверяет стартовый рисунок, keyboard/undo, Add/Delete, границу 1000, `.wires`, storage recovery, mobile gestures, point selection, group drag, layer reorder, zoom, toolbar, фоны, point modes, grid semantics, layout geometry, sensor gravity и collision behavior.
+Текущий набор содержит 35 сценариев. Он проверяет стартовый рисунок, keyboard/undo, Add/Delete, границу 1000, `.wires`, storage recovery, mobile gestures, point selection, group drag, layer reorder, zoom, toolbar, фоны, point modes, grid semantics, layout geometry, sensor gravity и collision behavior.
 
 Отдельный accessibility scenario проверяет:
 
@@ -63,7 +64,7 @@ npm run test:smoke
 Успешный прогон заканчивается:
 
 ```text
-34/34 checks passed
+35/35 checks passed
 ```
 
 ## Collision benchmark
@@ -95,6 +96,7 @@ reduction: 127.9x
 `.github/workflows/quality.yml` запускается для push и pull request в `main`:
 
 ```bash
+npm run build
 node --check tests/smoke.mjs
 npm test
 npm run benchmark:collision

@@ -1,13 +1,29 @@
 #!/usr/bin/env node
 import {spawn} from 'node:child_process';
+import {existsSync} from 'node:fs';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
+const CHROME_CANDIDATES = [
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser'
+];
+
+function resolveChrome() {
+  if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
+  const found = CHROME_CANDIDATES.find(path => existsSync(path));
+  if (found) return found;
+  throw new Error('Chromium не найден. Укажите путь: CHROME_BIN=/path/to/chrome npm run test:smoke');
+}
+
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const URL = process.env.WIRES_URL || 'http://127.0.0.1:8765/index.html';
-const CHROME = process.env.CHROME_BIN || '/home/hermesbot/.cache/ms-playwright/chromium-1234/chrome-linux/chrome';
+const PAGE_URL = process.env.WIRES_URL || 'http://127.0.0.1:8765/index.html';
+const CHROME = resolveChrome();
 const DEBUG_PORT = Number(process.env.CDP_PORT || 9222);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -27,7 +43,7 @@ async function main() {
   if (!process.env.WIRES_URL) {
     server = spawn('python3', ['-m', 'http.server', '8765', '--bind', '127.0.0.1'], {cwd: ROOT, stdio: ['ignore', 'ignore', 'ignore']});
     await waitFor(async () => {
-      const response = await fetch(URL);
+      const response = await fetch(PAGE_URL);
       return response.ok;
     });
   }
@@ -80,7 +96,7 @@ async function main() {
     const navigate = async () => {
       await cdp('Page.enable');
       await cdp('Runtime.enable');
-      await cdp('Page.navigate', {url: URL});
+      await cdp('Page.navigate', {url: PAGE_URL});
       await sleep(350);
       await waitFor(async () => (await evaluate('document.readyState')) === 'complete');
     };
@@ -494,7 +510,6 @@ async function main() {
       pass('adjacent pin stability', `${crowded.maxDrift.toFixed(2)}px maximum lateral drift`);
     } catch (error) { fail('adjacent pin stability', error); }
 
-    const errors = await evaluate('[]');
     await evaluate("localStorage.clear(); location.reload();");
     const failed = results.filter(result => result.error);
     console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
