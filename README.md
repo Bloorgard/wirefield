@@ -99,4 +99,10 @@ src/wires-format.js
 src/collision.js
 ```
 
+В `dist/index.html` модули подключаются с хэшем содержимого (`src/model.js?v=…`): после деплоя браузер не возьмёт из кэша старый модуль к новой странице. Локальный сервер из `.claude/launch.json` отдаёт файлы с `Cache-Control: no-store`.
+
 Тесты, benchmark, документация и `.git` в live-раздачу не входят. Production публикуется через `deployctl` после полного QA.
+
+## Иконки
+
+Иконки интерфейса — [Iconoteka](https://iconoteka.com/) Олега Турбабы, вес medium, лицензия MIT. Пути вшиты в `index.html` (`GLYPHS`). Ластика в наборе нет, он нарисован вручную под тот же вес.

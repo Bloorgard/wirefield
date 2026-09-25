@@ -33,7 +33,7 @@ test('normalizeModel repairs IDs, coordinates, colors, and occupied starts', () 
     gridVisible: false,
     wires: [
       {id: 'same', x: -2, y: 3.6, length: 99, color: 'bad'},
-      {id: 'same', x: 0, y: 4, length: 1.24, color: '#f200e9'}
+      {id: 'same', x: 0, y: 4, length: 1.244, color: '#f200e9'}
     ]
   }, fallback);
   assert.equal(normalized.cell, 80);
@@ -44,7 +44,7 @@ test('normalizeModel repairs IDs, coordinates, colors, and occupied starts', () 
   assert.deepEqual(normalized.wires.map(wire => [wire.x, wire.y]), [[0, 4], [1, 4]]);
   assert.equal(normalized.wires[0].length, 48);
   assert.equal(normalized.wires[0].color, '#102cff');
-  assert.equal(normalized.wires[1].length, 1);
+  assert.equal(normalized.wires[1].length, 1.24);
 });
 
 test('normalizeModel caps external state at MAX_WIRES', () => {

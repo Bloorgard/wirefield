@@ -20,7 +20,7 @@ export function hasTail(wire) {
 
 export function tailMinimumLength(wire, endX = wire.endX, endY = wire.endY) {
   if (!Number.isFinite(endX) || !Number.isFinite(endY)) return 0;
-  return Math.max(0.5, Math.ceil((Math.hypot(endX - wire.x, endY - wire.y) - 1e-9) * 2) / 2);
+  return Math.max(0.01, Math.ceil((Math.hypot(endX - wire.x, endY - wire.y) - 1e-9) * 100) / 100);
 }
 
 export function pinCells(wires, excludeIds = new Set()) {
@@ -83,7 +83,7 @@ export function normalizeModel(data, fallback) {
       id: safeId(value.id, index, used),
       x: Math.max(0, Math.min(MAX_COORD, Math.round(Number(value.x) || 0))),
       y: Math.max(0, Math.min(MAX_COORD, Math.round(Number(value.y) || 0))),
-      length: Math.max(0, Math.min(MAX_LENGTH, Math.round((Number.isFinite(Number(value.length)) ? Number(value.length) : 0.5) * 2) / 2)),
+      length: Math.max(0, Math.min(MAX_LENGTH, Math.round((Number.isFinite(Number(value.length)) ? Number(value.length) : 0.5) * 100) / 100)),
       color: /^#[0-9a-f]{6}$/i.test(value.color) ? value.color : COLORS[0]
     };
     if (wire.length > 0 && Number.isFinite(Number(value.endX)) && Number.isFinite(Number(value.endY))) {
