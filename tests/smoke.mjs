@@ -102,7 +102,7 @@ async function main() {
     };
     const TEST_FIXTURE = {version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:7,y:2,length:10,color:'#102cff'},{id:'0002',x:12,y:4,length:9,color:'#102cff'},{id:'0003',x:16,y:1,length:11,color:'#102cff'}]};
     const reset = async (defaultSketch=false) => {
-      const storage=defaultSketch?'localStorage.clear();':`localStorage.clear();localStorage.setItem('wires-v2',${JSON.stringify(JSON.stringify(TEST_FIXTURE))});`;
+      const storage=defaultSketch?"localStorage.clear();localStorage.setItem('wires-layout','panel');":`localStorage.clear();localStorage.setItem('wires-layout','panel');localStorage.setItem('wires-v2',${JSON.stringify(JSON.stringify(TEST_FIXTURE))});`;
       await evaluate(`${storage}location.reload();`);
       await sleep(350);
       await waitFor(async () => (await evaluate('document.readyState')) === 'complete');
@@ -160,7 +160,7 @@ async function main() {
 
     try {
       const limitFixture = {version:1,cell:44,background:'#f200e9',pointMode:'white',gridVisible:true,wires:Array.from({length:999},(_,i)=>({id:String(i+1).padStart(4,'0'),x:i,y:0,length:0,color:'#102cff'}))};
-      await evaluate(`localStorage.clear();localStorage.setItem('wires-v2',${JSON.stringify(JSON.stringify(limitFixture))});location.reload()`);
+      await evaluate(`localStorage.clear();localStorage.setItem('wires-layout','panel');localStorage.setItem('wires-v2',${JSON.stringify(JSON.stringify(limitFixture))});location.reload()`);
       await sleep(1200);
       await waitFor(async () => (await evaluate("document.querySelectorAll('.wire-group').length")) === 999, 10000);
       const capacity = await evaluate(`(()=>{const count=()=>JSON.parse(localStorage.getItem('wires-v2')).wires.length,limitToast=()=>document.querySelector('#toast').textContent.includes('Лимит: 1000');document.querySelector('#addBtn').click();const afterBoundary=count();document.querySelector('#addBtn').click();const addBlocked={count:count(),toast:limitToast()};document.querySelector('.item.primary .copy').click();const duplicateBlocked={count:count(),toast:limitToast()};document.querySelector('#brushTool').click();const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),x=r.left+44,y=r.top+176;scene.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:901,pointerType:'mouse',button:0,buttons:1,clientX:x,clientY:y}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:901,pointerType:'mouse',button:0,buttons:0,clientX:x,clientY:y}));const brushBlocked={count:count(),toast:limitToast()};document.querySelector('#selectTool').click();const body=document.querySelector('.wire-group[data-id="1000"] .wire-body');body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:902,pointerType:'mouse',button:0,buttons:1,altKey:true,clientX:x,clientY:y}));scene.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:902,pointerType:'mouse',button:0,buttons:0,altKey:true,clientX:x,clientY:y}));const altBlocked={count:count(),toast:limitToast()};return {afterBoundary,addBlocked,duplicateBlocked,brushBlocked,altBlocked}})()`);
@@ -531,7 +531,7 @@ async function main() {
       pass('adjacent pin stability', `${crowded.maxDrift.toFixed(2)}px maximum lateral drift`);
     } catch (error) { fail('adjacent pin stability', error); }
 
-    await evaluate("localStorage.clear(); location.reload();");
+    await evaluate("localStorage.clear();localStorage.setItem('wires-layout','panel'); location.reload();");
     const failed = results.filter(result => result.error);
     console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
     if (failed.length) process.exitCode = 1;
