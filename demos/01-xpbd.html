@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>01 · XPBD и подшаги — лаборатория WIRES</title>
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+<canvas id="stage"></canvas>
+<header class="lab-head">
+  <a class="back" href="index.html">← лаборатория</a>
+  <h1><small>вариант 01</small>XPBD и подшаги</h1>
+  <p class="lead">Тот же позиционный солвер, но время режется на подшаги, а не итерации. Один проход ограничений на подшаг сходится сильно лучше, чем десять проходов на кадр, и жёсткость перестаёт зависеть от их числа. Сравните: 1×8 против 8×1 при одинаковой цене.</p>
+</header>
+<section class="panel hud" id="hud"></section>
+<section class="panel controls" id="controls"></section>
+<p class="hint">тяните белую точку · колесо — зум · перетаскивание фона — панорама</p>
+
+<script type="module">
+import {startLab} from './lab.js';
+import {createXpbdSolver} from './solvers/xpbd.js';
+
+const solver = createXpbdSolver();
+
+startLab({
+  solver,
+  note: 'Бюджет солвера — это подшаги × итерации. При равном бюджете подшаги дают меньшее растяжение и меньшее численное демпфирование, чем итерации.',
+  controls: [
+    {id: 'count', label: 'жгутов', type: 'range', min: 20, max: 1000, step: 20, value: 160, rebuild: true},
+    {id: 'substeps', label: 'подшагов', type: 'range', min: 1, max: 16, value: 8},
+    {id: 'iterations', label: 'итераций на подшаг', type: 'range', min: 1, max: 16, value: 1},
+    {id: 'restorePasses', label: 'проходов после контакта', type: 'range', min: 1, max: 10, value: 2},
+    {id: 'compliance', label: 'податливость', type: 'range', min: -9, max: -4, step: 0.25, value: -8, format: v => '1e' + v},
+    // Редактор гасит скорость множителем .94 за кадр — это 3.7 в секунду,
+    // и 14.9 при включённых коллизиях. Держим тот же порядок.
+    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 8, step: 0.1, value: 3.7, format: v => v.toFixed(1)},
+    {id: 'friction', label: 'трение о пин', type: 'range', min: 0, max: 1, step: 0.05, value: 0.35, format: v => v.toFixed(2)},
+    {id: 'bounce', label: 'отскок от пина', type: 'range', min: 0, max: 0.8, step: 0.05, value: 0, format: v => v.toFixed(2)},
+    {id: 'slop', label: 'допуск контакта', type: 'range', min: 0, max: 6, step: 0.25, value: 1.75, format: v => v.toFixed(2) + ' px'},
+    {id: 'beta', label: 'релаксация контакта', type: 'range', min: 0.05, max: 1, step: 0.05, value: 0.4, format: v => v.toFixed(2)},
+    {id: 'collisions', label: 'коллизии с пинами', type: 'toggle', value: true},
+    {id: 'perSubstep', label: 'контакты на каждый подшаг', type: 'toggle', value: false}
+  ]
+});
+</script>
+</body>
+</html>

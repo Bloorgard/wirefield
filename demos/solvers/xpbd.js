@@ -1,0 +1,175 @@
+import {createChains, maxStretch, solveSegmentPins} from '../lab.js';
+
+
+export function createXpbdSolver() {
+  return {
+    chains: null,
+    contacts: 0,
+    contactNormal: null,
+    contactFlag: null,
+
+    init(lab) {
+      this.chains = createChains(lab);
+      this.contactNormal = new Float32Array(this.chains.total * 2);
+      this.contactFlag = new Uint8Array(this.chains.total);
+    },
+
+    particleCount() {
+      return this.chains.total;
+    },
+
+    step(dt, lab) {
+      const chains = this.chains;
+      const {pos, prev, vel, invMass, offset, rest, pinned} = chains;
+      const substeps = lab.params.substeps | 0;
+      const iterations = lab.params.iterations | 0;
+      const h = dt / substeps;
+      // XPBD: податливость нормируется на квадрат шага, поэтому жёсткость
+      // не зависит ни от dt, ни от числа итераций — только от compliance.
+      const compliance = Math.pow(10, lab.params.compliance) / (h * h);
+      const drag = lab.params.drag;
+      const friction = lab.params.friction;
+      const bounce = lab.params.bounce;
+      const collisions = lab.params.collisions;
+      const clearance = lab.clearance;
+      const gravityX = lab.gravity.x;
+      const gravityY = lab.gravity.y;
+      const wireCount = lab.wires.length;
+      this.contacts = 0;
+
+      for (let sub = 0; sub < substeps; sub++) {
+        // предсказание
+        for (let i = 0; i < chains.total; i++) {
+          if (invMass[i] === 0) continue;
+          const at = i * 2;
+          vel[at] += gravityX * h;
+          vel[at + 1] += gravityY * h;
+          const decay = Math.max(0, 1 - drag * h);
+          vel[at] *= decay;
+          vel[at + 1] *= decay;
+          prev[at] = pos[at];
+          prev[at + 1] = pos[at + 1];
+          pos[at] += vel[at] * h;
+          pos[at + 1] += vel[at + 1] * h;
+        }
+
+        // кинематические концы
+        for (let w = 0; w < wireCount; w++) {
+          const first = offset[w] * 2;
+          pos[first] = lab.pinX[lab.startPin[w]];
+          pos[first + 1] = lab.pinY[lab.startPin[w]];
+          if (pinned[w]) {
+            const last = (offset[w + 1] - 1) * 2;
+            pos[last] = lab.pinX[lab.tailPin[w]];
+            pos[last + 1] = lab.pinY[lab.tailPin[w]];
+          }
+        }
+
+        // Фаза 1 — динамика. Только длина; её невязка законно становится скоростью.
+        for (let iteration = 0; iteration < iterations; iteration++) {
+          this.solveLength(lab, compliance, false);
+        }
+
+        for (let i = 0; i < chains.total; i++) {
+          if (invMass[i] === 0) continue;
+          const at = i * 2;
+          vel[at] = (pos[at] - prev[at]) / h;
+          vel[at + 1] = (pos[at + 1] - prev[at + 1]) / h;
+        }
+
+        if (collisions && lab.params.perSubstep) this.contactPhase(lab, compliance, clearance, friction, bounce);
+      }
+      if (collisions && !lab.params.perSubstep) this.contactPhase(lab, compliance, clearance, friction, bounce);
+    },
+
+    // Фаза 2 — разведение контактов. Скорость уже посчитана, и каждая поправка
+    // здесь двигает `prev` вместе с `pos`, поэтому не порождает движения вовсе.
+    // Без такого разделения возникает автоколебание: контакт отодвигает жгут,
+    // проекция длины возвращает его обратно, и вот это возвращение — уже
+    // скорость. Жгут, задевающий пин по касательной, качается вечно.
+    //
+    // По умолчанию фаза идёт раз в кадр, а не на каждый подшаг: это позиционная
+    // поправка, дробить её по времени незачем, а стоит она дороже всей динамики.
+    // Именно из-за неё подшаги кажутся дорогими, если оставить контакты внутри.
+    contactPhase(lab, compliance, clearance, friction, bounce) {
+      const chains = this.chains;
+      const {vel, invMass, prev} = chains;
+      this.contactFlag.fill(0);
+      this.contacts += solveSegmentPins(lab, chains, {
+        clearance, prev, flag: this.contactFlag, normal: this.contactNormal,
+        slop: lab.params.slop, beta: lab.params.beta
+      });
+
+      // Восстановление длины после разведения. Итеративный солвер не возвращает
+      // её точно, а остаток невязки станет скоростью уже в следующем подшаге.
+      // FTL из варианта 02 закрывает то же самое ровно за один проход и потому
+      // успокаивается быстрее.
+      for (let pass = 0; pass < (lab.params.restorePasses | 0); pass++) {
+        this.solveLength(lab, compliance, true);
+      }
+
+      // Трение и отскок — единственное, что меняет скорость на контакте, и оба
+      // могут её только уменьшить.
+      for (let i = 0; i < chains.total; i++) {
+        if (invMass[i] === 0 || !this.contactFlag[i]) continue;
+        const at = i * 2;
+        const nx = this.contactNormal[at];
+        const ny = this.contactNormal[at + 1];
+        const normal = vel[at] * nx + vel[at + 1] * ny;
+        const tangentX = vel[at] - normal * nx;
+        const tangentY = vel[at + 1] - normal * ny;
+        const keep = 1 - friction;
+        vel[at] = tangentX * keep + nx * Math.max(0, normal) * bounce;
+        vel[at + 1] = tangentY * keep + ny * Math.max(0, normal) * bounce;
+      }
+    },
+
+    solveLength(lab, compliance, withPrev) {
+      const {pos, prev, invMass, offset, rest} = this.chains;
+      for (let w = 0; w < lab.wires.length; w++) {
+        const to = offset[w + 1] - 1;
+        const restLength = rest[w];
+        for (let k = offset[w]; k < to; k++) {
+          const a = k * 2;
+          const b = a + 2;
+          const wa = invMass[k];
+          const wb = invMass[k + 1];
+          const sum = wa + wb;
+          if (sum === 0) continue;
+          const dx = pos[a] - pos[b];
+          const dy = pos[a + 1] - pos[b + 1];
+          const distance = Math.hypot(dx, dy);
+          if (distance < 1e-6) continue;
+          const delta = -(distance - restLength) / (sum + compliance);
+          const nx = dx / distance * delta;
+          const ny = dy / distance * delta;
+          pos[a] += nx * wa;
+          pos[a + 1] += ny * wa;
+          pos[b] -= nx * wb;
+          pos[b + 1] -= ny * wb;
+          if (!withPrev) continue;
+          prev[a] += nx * wa;
+          prev[a + 1] += ny * wa;
+          prev[b] -= nx * wb;
+          prev[b + 1] -= ny * wb;
+        }
+      }
+    },
+
+    draw(context, lab) {
+      const {pos, offset} = this.chains;
+      for (let w = 0; w < lab.wires.length; w++) {
+        lab.strokeWire(pos, offset[w], offset[w + 1] - offset[w], lab.wires[w].color);
+      }
+    },
+
+    stats(lab) {
+      const stretch = maxStretch(lab, this.chains);
+      return [
+        ['растяжение', stretch.toFixed(2) + ' %', stretch > 3],
+        ['контактов', String(this.contacts)],
+        ['проходов', String(lab.params.substeps * lab.params.iterations)]
+      ];
+    }
+  };
+}

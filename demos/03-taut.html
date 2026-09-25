@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>03 · Натянутая нить — лаборатория WIRES</title>
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+<canvas id="stage"></canvas>
+<header class="lab-head">
+  <a class="back" href="index.html">← лаборатория</a>
+  <h1><small>вариант 03</small>Натянутая нить</h1>
+  <p class="lead">Частиц нет. Жгут — это список пинов, на которые он намотан, и всё. Форма считается геометрией, а не интегрированием: между зацепами нить пряма, слабина провисает параболой. Намотка и размотка — дискретные события, поэтому провалиться сквозь пин физически нечему.</p>
+</header>
+<section class="panel hud" id="hud"></section>
+<section class="panel controls" id="controls"></section>
+<p class="hint">тяните белую точку · колесо — зум · перетаскивание фона — панорама</p>
+
+<script type="module">
+import {startLab} from './lab.js';
+import {createTautSolver} from './solvers/taut.js';
+
+const solver = createTautSolver();
+
+startLab({
+  solver,
+  note: 'Стоящий на месте жгут не считается вовсе: пока якорь и кончик не двигаются, форма уже известна. Расход памяти — список зацепов, обычно ноль или один.',
+  controls: [
+    {id: 'count', label: 'жгутов', type: 'range', min: 20, max: 1000, step: 20, value: 160, rebuild: true},
+    {id: 'tilt', label: 'наклон гравитации', type: 'range', min: -80, max: 80, value: 0, format: v => v + '°'},
+    {id: 'drag', label: 'сопротивление', type: 'range', min: 0, max: 6, step: 0.1, value: 1.1, format: v => v.toFixed(1)},
+    {id: 'bounce', label: 'упругость рывка', type: 'range', min: 0, max: 0.8, step: 0.05, value: 0.15, format: v => v.toFixed(2)}
+  ]
+});
+</script>
+</body>
+</html>
