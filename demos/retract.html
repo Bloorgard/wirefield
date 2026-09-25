@@ -41,7 +41,7 @@
     <h2><small>КАК ЧИТАТЬ</small>Что пробовать руками</h2>
     <p>
       <b>A:</b> тап по стартовой точке — смотать до натяга; удерживать — сматывать, пока держите.
-      <b>B:</b> ведите пальцем по кругу вокруг стартовой точки: по часовой — смотать, против — размотать.
+      <b>B:</b> ведите пальцем по кругу вокруг стартовой точки: по часовой — размотать, против — смотать, как растёт и убывает дуга катушки.
       <b>C:</b> тяните хвост и ведите обратно — шнур сматывается следом, как рулетка.
       Сматывание всегда останавливается на натяге: шнур ложится на крючки, но с них не срывается.
     </p>
@@ -138,7 +138,7 @@ const MODELS = [
   },
   {
     tag: 'B', title: 'Крутить катушку', knob: true,
-    text: '<p>Вокруг стартовой точки — кольцо-ручка. <b>Ведите по кругу: по часовой — смотать, против — размотать.</b> Точно в обе стороны, но жест надо знать заранее.</p>'
+    text: '<p>Вокруг стартовой точки — кольцо-ручка. <b>Ведите по кругу: по часовой — размотать, против — смотать</b>, в ту же сторону, куда растёт и убывает дуга катушки. Точно в обе стороны, но жест надо знать заранее.</p>'
   },
   {
     tag: 'C', title: 'Рулетка', tape: true,
@@ -326,8 +326,8 @@ function createPane(host, model) {
         pane.gestureLabel = 'держу старт';
       } else if (model.knob) {
         if (first) pane.stats.retracts++;
-        if (reelIn(0, rate)) pane.knobAngle[0] += rate / KNOB_CELLS * Math.PI * 2;
-        pane.gestureLabel = 'кручу катушку ↻';
+        if (reelIn(0, rate)) pane.knobAngle[0] -= rate / KNOB_CELLS * Math.PI * 2;
+        pane.gestureLabel = 'кручу катушку ↺';
       } else {
         pane.gestureLabel = 'жеста нет — уже натянут';
       }
@@ -570,7 +570,8 @@ function createPane(host, model) {
       if (delta < -Math.PI) delta += Math.PI * 2;
       press.angle = angle;
       const cells = Math.abs(delta) / (Math.PI * 2) * KNOB_CELLS;
-      if (delta > 0) {
+      // по часовой — размотать: дуга катушки растёт в ту же сторону
+      if (delta < 0) {
         if (reelIn(press.rope, cells)) pane.knobAngle[press.rope] += delta;
       } else {
         payOut(press.rope, cells);
