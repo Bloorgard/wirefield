@@ -151,6 +151,46 @@ test('index reports whether any pin moved since the previous build', () => {
   assert.equal(movedIndex.swept, true);
 });
 
+test('slop leaves a contact resting just inside the clearance untouched', () => {
+  const index = buildPinSpatialIndex(wires, cell);
+  const clearance = cell * 0.98;
+  const restY = 22 + clearance - 1;
+  const points = [
+    {x: 22, y: restY, ox: 22, oy: restY},
+    {x: 110, y: restY, ox: 110, oy: restY},
+    {x: 198, y: restY, ox: 198, oy: restY}
+  ];
+  const contacts = resolveWirePinCollisions('A', points, false, index, clearance, {slop: cell * 0.04});
+  assert.ok(contacts > 0, 'the contact should still be reported');
+  assert.ok(Math.abs(points[1].y - restY) < 1e-9, `expected no positional nudge inside slop, moved to ${points[1].y}`);
+});
+
+test('velocity into the pin is cancelled even inside the slop', () => {
+  const index = buildPinSpatialIndex(wires, cell);
+  const clearance = cell * 0.98;
+  const restY = 22 + clearance - 1;
+  const points = [
+    {x: 22, y: restY, ox: 22, oy: restY},
+    {x: 110, y: restY, ox: 110, oy: restY + 3},
+    {x: 198, y: restY, ox: 198, oy: restY}
+  ];
+  resolveWirePinCollisions('A', points, false, index, clearance, {slop: cell * 0.04});
+  const inbound = points[1].y - points[1].oy;
+  assert.ok(Math.abs(inbound) < 1e-9, `expected the inbound velocity cancelled, got ${inbound}`);
+});
+
+test('a pin landing exactly on a segment carries it along the sweep', () => {
+  const prev = new Map([['B:0', {x: 30, y: 22}]]);
+  const index = buildPinSpatialIndex(wires, cell, prev);
+  const points = [
+    {x: 110, y: -50, ox: 110, oy: -50},
+    {x: 110, y: 22, ox: 110, oy: 22}
+  ];
+  const contacts = resolveWirePinCollisions('A', points, false, index, cell * 0.98);
+  assert.ok(contacts > 0);
+  assert.ok(points[1].x > 110, `expected the segment carried ahead of the sweep, got x=${points[1].x}`);
+});
+
 test('barycentric correction moves both free segment points away from the pin', () => {
   const index = buildPinSpatialIndex(wires, cell);
   const points = [
@@ -162,4 +202,37 @@ test('barycentric correction moves both free segment points away from the pin', 
   assert.ok(contacts > 0);
   assert.ok(points[1].y > 22);
   assert.ok(points[2].y > 22);
+});
+
+test('a neighbour pin touching the fixed start does not kick the wire', () => {
+  const neighbours = [
+    {id: 'R', x: 0, y: 0, length: 4, color: '#102cff'},
+    {id: 'N', x: 0, y: 1, length: 2, color: '#f200e9'}
+  ];
+  const index = buildPinSpatialIndex(neighbours, cell);
+  const points = [
+    {x: 22, y: 22, ox: 22, oy: 22},
+    {x: 54, y: 25, ox: 54, oy: 25},
+    {x: 86, y: 27, ox: 86, oy: 27}
+  ];
+  resolveWirePinCollisions('R', points, false, index, cell * 1.06, {
+    correction: 0.35, maxPush: cell * 0.5, response: 'position', slop: cell * 0.04
+  });
+  assert.ok(Math.hypot(points[1].x - 54, points[1].y - 25) < 0.5, `expected no kick near the anchor, moved to ${points[1].x},${points[1].y}`);
+});
+
+test('a pin under the anchor still deflects a wire hanging onto it', () => {
+  const neighbours = [
+    {id: 'R', x: 0, y: 0, length: 4, color: '#102cff'},
+    {id: 'N', x: 0, y: 1, length: 2, color: '#f200e9'}
+  ];
+  const index = buildPinSpatialIndex(neighbours, cell);
+  const points = [
+    {x: 22, y: 22, ox: 22, oy: 22},
+    {x: 23, y: 54, ox: 23, oy: 54},
+    {x: 24, y: 86, ox: 24, oy: 86}
+  ];
+  const contacts = resolveWirePinCollisions('R', points, false, index, cell * 1.06);
+  assert.ok(contacts > 0);
+  assert.ok(points[2].x > 30, `expected the hanging wire pushed aside, got x=${points[2].x}`);
 });

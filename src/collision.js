@@ -89,6 +89,7 @@ export function resolveWirePinCollisions(wireId, points, pinned, index, clearanc
   const correction = Number.isFinite(options.correction) ? options.correction : 1;
   const maxPush = Number.isFinite(options.maxPush) ? options.maxPush : Infinity;
   const positionOnly = options.response === 'position';
+  const slop = Number.isFinite(options.slop) ? options.slop : 0;
   const candidates = options.candidates || null;
   const last = points.length - 1;
   let contacts = 0;
@@ -126,16 +127,25 @@ export function resolveWirePinCollisions(wireId, points, pinned, index, clearanc
         normalX = prevDistance > 1e-6 ? prevDeltaX / prevDistance : (-segmentY / segmentLength || 1);
         normalY = prevDistance > 1e-6 ? prevDeltaY / prevDistance : (segmentX / segmentLength || 0);
         penetration = clearance + distance;
+      } else if (distance > 1e-6) {
+        normalX = deltaX / distance;
+        normalY = deltaY / distance;
+        penetration = Math.max(0, clearance - distance - slop);
       } else {
-        normalX = distance > 1e-6 ? deltaX / distance : (-segmentY / segmentLength || 1);
-        normalY = distance > 1e-6 ? deltaY / distance : (segmentX / segmentLength || 0);
-        penetration = clearance - distance;
+        const prevDistance = Math.sqrt(prevDeltaX * prevDeltaX + prevDeltaY * prevDeltaY);
+        normalX = prevDistance > 1e-6 ? prevDeltaX / prevDistance : (-segmentY / segmentLength || 1);
+        normalY = prevDistance > 1e-6 ? prevDeltaY / prevDistance : (segmentX / segmentLength || 0);
+        penetration = Math.max(0, clearance - distance - slop);
       }
       const push = Math.min(maxPush, penetration * correction);
       const startWeight = fixedStart ? 0 : 1 - projection;
       const endWeight = fixedEnd ? 0 : projection;
-      const denominator = startWeight * startWeight + endWeight * endWeight;
-      if (denominator <= 1e-8) continue;
+      // У отрезка с закреплённым концом точное решение сдвигает свободную точку
+      // на push/t: пин соседней клетки у самого конца бьёт её на maxPush каждый
+      // кадр, и жгуты, стартующие рядом, дрожат вечно. Вес t вместо 1/t гасит
+      // такой контакт плавно, без порога, а вдали от конца его добирают итерации.
+      const denominator = fixedStart || fixedEnd ? 1 : startWeight * startWeight + endWeight * endWeight;
+      if (startWeight + endWeight <= 1e-8) continue;
       if (startWeight > 0) {
         const startPush = Math.min(maxPush, push * startWeight / denominator);
         moveContact(start, normalX * startPush, normalY * startPush, normalX, normalY, positionOnly);
