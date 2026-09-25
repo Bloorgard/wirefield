@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>Сматывание — WIRES</title>
+<link rel="stylesheet" href="lab.css">
+<style>
+.panes.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:1100px){.panes.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:700px){.panes.four{grid-template-columns:1fr}}
+.state{font:11px var(--mono);min-height:1.3em}
+</style>
+</head>
+<body class="deck">
+<div class="deck-inner">
+  <a class="back" href="index.html">← лаборатория</a>
+  <p class="logo">Сматывание<small>КАК УМЕНЬШИТЬ ДЛИНУ ПРЯМО НА ШНУРЕ · ВСЕ ОКНА НА ФРИКЦИОНЕ</small></p>
+  <p class="intro">
+    Вытянуть шнур легко — тянешь хвост. Здесь четыре способа сделать обратное без панели: <b>смотать слабину, не снимая намотки</b>.
+    Основа у всех одна — фрикцион: слегка натянутый шнур желтеет и держит длину, а за порогом катушка отдаёт.
+    Сценарий сам показывает жест каждого окна (подпись в углу окна), потом можно попробовать руками — окна независимы.
+  </p>
+  <div class="legend">
+    <span><i class="probe"></i>точка, которую ведут</span>
+    <span><i class="reel"></i>катушка: сколько размотано</span>
+  </div>
+  <div class="bar">
+    <button class="toggle" type="button" id="slow" aria-pressed="false">замедлить ×4</button>
+    <button class="toggle" type="button" id="restart">заново</button>
+  </div>
+
+  <section class="question">
+    <div class="scenarios" id="scenarios"></div>
+    <p class="scenario-note" id="scenarioNote"></p>
+    <div class="panes four" id="panes"></div>
+  </section>
+
+  <section class="question">
+    <h2><small>КАК ЧИТАТЬ</small>Что пробовать руками</h2>
+    <p>
+      <b>A:</b> тап по стартовой точке — смотать до натяга; удерживать — сматывать, пока держите.
+      <b>B:</b> ведите пальцем по кругу вокруг стартовой точки: по часовой — смотать, против — размотать.
+      <b>C:</b> тяните хвост и ведите обратно — шнур сматывается следом, как рулетка.
+      Сматывание всегда останавливается на натяге: шнур ложится на крючки, но с них не срывается.
+    </p>
+  </section>
+
+  <p class="foot">
+    Предыдущий полигон — <a href="reel.html">катушка и натяжение</a>. Все демо — в <a href="index.html">лаборатории</a>.
+  </p>
+</div>
+
+<script type="module">
+import {CELL, CLEARANCE, PinGrid} from './lab.js';
+import {createCurrentSolver} from './solvers/current.js';
+
+const INK = '#f8f5ed';
+const ACCENT = '#ffc642';
+const HOT = '#ff5a4e';
+const WIRE = '#f200e9';
+const STEP = 1 / 60;
+const TAUT_AT = 0.04;           // сматывание останавливается на этом натяжении
+const FRICTION_AT = 0.12;       // фрикцион: отдаёт, только когда натяжение выше порога
+const BREAK_AT = 0.25;          // предел: шнур срывается с зацепа
+const AUTO_RATE = 0.12;         // тап: скорость сматывания, клеток за шаг
+const HOLD_RATE = 0.06;         // удержание: скорость сматывания, клеток за шаг
+const TAPE_RATE = 0.3;          // рулетка: сколько может смотать за шаг
+const KNOB_CELLS = 4;           // катушка-ручка: клеток за оборот
+const HAND_SPEED = CELL * 0.3;  // рука не телепортируется: не больше 0.3 клетки за шаг
+const LIMIT = 48;               // предел катушки, как в редакторе
+
+// ---------------------------------------------------------------- сцены
+// `gesture` — чем «сматывает» сценарий: full — до натяга, partial — на `cells` клеток.
+// Каждое окно исполняет его своим жестом; у рулетки своего жеста нет.
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const along = (points, t) => {
+  let total = 0;
+  const lengths = [0];
+  for (let i = 1; i < points.length; i++) lengths.push(total += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+  const target = Math.max(0, Math.min(1, t)) * total;
+  let i = 1;
+  while (i < points.length - 1 && lengths[i] < target) i++;
+  const k = (target - lengths[i - 1]) / (lengths[i] - lengths[i - 1] || 1);
+  return {x: lerp(points[i - 1][0], points[i][0], k), y: lerp(points[i - 1][1], points[i][1], k)};
+};
+const orbit = t => {
+  const angle = (150 + Math.min(1, t / 8) * 330) * Math.PI / 180;
+  return {x: 6.5 + Math.cos(angle) * 4, y: 4.5 + Math.sin(angle) * 3.6};
+};
+
+const SCENES = [
+  {
+    id: 'back',
+    label: 'вытянуть, вернуть, подтянуть',
+    note: 'Хвост вытягивают на 10 клеток и ведут обратно до середины — появляется слабина. Потом шнур подтягивают до натяга.',
+    size: [14, 10],
+    ropes: [{start: [1, 5], tail: [2, 5], length: 2}],
+    duration: 9,
+    drive: t => t < 3 ? along([[2, 5], [12, 5]], t / 3) : along([[12, 5], [6, 5]], (t - 3) / 2),
+    gesture: {at: 5.6, duration: 1.8, kind: 'full'}
+  },
+  {
+    id: 'wind',
+    label: 'намотать и затянуть',
+    note: 'Хвост медленно обходит три крючка, потом немного возвращается назад по той же дуге — намотка провисает. Потом её затягивают, не снимая с крючков.',
+    size: [14, 10],
+    ropes: [{start: [1, 4], tail: [2, 6], length: 4}],
+    hooks: [[5, 2], [9, 4], [5, 7]],
+    duration: 13,
+    drive: t => {
+      if (t < 8) return orbit(t);
+      // назад по той же дуге: последний пролёт укорачивается, намотка провисает
+      return orbit(8 - Math.min(1, t - 8) * 1.6);
+    },
+    gesture: {at: 9.6, duration: 2, kind: 'full'}
+  },
+  {
+    id: 'sag',
+    label: 'провис и подтянуть чуть-чуть',
+    note: 'Шнур вытягивают на 10 клеток и возвращают хвост на 4 — получается провис для рисунка. Потом его подтягивают на полторы клетки, не до конца.',
+    size: [14, 10],
+    ropes: [{start: [1, 2], tail: [2, 2], length: 1.5}],
+    duration: 10,
+    drive: t => t < 3 ? along([[2, 2], [12, 2]], t / 3) : along([[12, 2], [8, 2]], (t - 3) / 1.5),
+    gesture: {at: 6, duration: 1.2, kind: 'partial', cells: 1.5}
+  }
+];
+
+// ---------------------------------------------------------------- модели
+
+const MODELS = [
+  {
+    tag: 'A', title: 'Кнопка пылесоса', tap: true,
+    text: '<p><b>Тап по стартовой точке</b> — шнур сматывается до натяга. <b>Удержание</b> — сматывается, пока держите: можно подтянуть наполовину и оставить провис. Стартовая точка и есть катушка.</p>'
+  },
+  {
+    tag: 'B', title: 'Крутить катушку', knob: true,
+    text: '<p>Вокруг стартовой точки — кольцо-ручка. <b>Ведите по кругу: по часовой — смотать, против — размотать.</b> Точно в обе стороны, но жест надо знать заранее.</p>'
+  },
+  {
+    tag: 'C', title: 'Рулетка', tape: true,
+    text: '<p>Пока тянете хвост, катушка подпружинена: <b>повели обратно — шнур сматывается следом.</b> Отдельного жеста нет. Цена: провис движением руки не сделать — шнур всегда натянут.</p>'
+  },
+  {
+    tag: 'A+C', title: 'Рулетка + кнопка', tap: true, tape: true,
+    text: '<p>Во время драга — рулетка, после — тап или удержание на старте. <b>Сматывание всегда под рукой</b>, но провис по-прежнему не сделать движением: его придётся отпускать отдельно.</p>'
+  }
+];
+
+// ---------------------------------------------------------------- геометрия
+
+function distanceToPolyline(points, x, y) {
+  let best = Infinity;
+  let walked = 0;
+  let bestAt = 0;
+  for (let i = 0; i + 3 < points.length; i += 2) {
+    const ax = points[i], ay = points[i + 1], bx = points[i + 2], by = points[i + 3];
+    const sx = bx - ax, sy = by - ay;
+    const span = Math.hypot(sx, sy);
+    const t = Math.max(0, Math.min(1, ((x - ax) * sx + (y - ay) * sy) / (span * span || 1)));
+    const d = Math.hypot(ax + sx * t - x, ay + sy * t - y);
+    if (d < best) {
+      best = d;
+      bestAt = walked + span * t;
+    }
+    walked += span;
+  }
+  distanceToPolyline.at = bestAt;
+  return best;
+}
+
+function polylineLength(points) {
+  let length = 0;
+  for (let i = 0; i + 3 < points.length; i += 2) length += Math.hypot(points[i + 2] - points[i], points[i + 3] - points[i + 1]);
+  return length;
+}
+
+// Провис — наибольшее отклонение шнура от прямой между стартом и хвостом.
+function sagOf(points) {
+  const n = points.length;
+  const ax = points[0], ay = points[1], bx = points[n - 2], by = points[n - 1];
+  const chord = Math.hypot(bx - ax, by - ay) || 1;
+  let worst = 0;
+  for (let i = 0; i < n; i += 2) worst = Math.max(worst, Math.abs((bx - ax) * (ay - points[i + 1]) - (ax - points[i]) * (by - ay)) / chord);
+  return worst;
+}
+
+function mix(a, b, t) {
+  const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
+  return '#' + pa.map((v, i) => Math.round(lerp(v, pb[i], t)).toString(16).padStart(2, '0')).join('');
+}
+
+function tensionColor(stretch) {
+  const k = Math.max(0, Math.min(1, stretch / BREAK_AT));
+  return k < 0.5 ? mix(WIRE, ACCENT, k * 2) : mix(ACCENT, HOT, (k - 0.5) * 2);
+}
+
+// ---------------------------------------------------------------- окно
+
+let scene = SCENES[0];
+
+function createPane(host, model) {
+  const article = document.createElement('article');
+  article.className = 'pane';
+  article.innerHTML = `<canvas></canvas><div class="pane-text"><h3><small>${model.tag}</small>${model.title}</h3>${model.text}<div class="manual"></div><div class="state"></div><div class="readouts"></div></div>`;
+  host.append(article);
+  const canvas = article.querySelector('canvas');
+  const context = canvas.getContext('2d', {alpha: false});
+  const readouts = article.querySelector('.readouts');
+  const manualNote = article.querySelector('.manual');
+  const stateLine = article.querySelector('.state');
+  const pane = {model, canvas};
+
+  pane.load = () => {
+    const ropes = scene.ropes;
+    const hooks = scene.hooks || [];
+    const total = ropes.length * 2 + hooks.length;
+    const lab = {
+      wires: ropes.map(rope => ({length: rope.length, color: WIRE})),
+      pinX: new Float64Array(total),
+      pinY: new Float64Array(total),
+      pinWire: new Int32Array(total),
+      startPin: new Int32Array(ropes.length),
+      tailPin: new Int32Array(ropes.length),
+      pinCount: total,
+      grid: new PinGrid(CELL * 2),
+      params: {collisions: true},
+      gravity: {x: 0, y: 792},
+      cell: CELL,
+      clearance: CLEARANCE,
+      ghostPins: ropes.map(() => new Set())
+    };
+    let cursor = 0;
+    const place = ([x, y], owner) => {
+      lab.pinX[cursor] = (x + 0.5) * CELL;
+      lab.pinY[cursor] = (y + 0.5) * CELL;
+      lab.pinWire[cursor] = owner;
+      return cursor++;
+    };
+    ropes.forEach((rope, index) => {
+      lab.startPin[index] = place(rope.start, index);
+      lab.tailPin[index] = place(rope.tail, index);
+    });
+    hooks.forEach(hook => place(hook, -1));
+    lab.strokeWire = (points, start, count, color) => {
+      context.strokeStyle = color;
+      context.beginPath();
+      const base = start * 2;
+      context.moveTo(points[base], points[base + 1]);
+      for (let i = 1; i < count - 1; i++) {
+        const at = base + i * 2;
+        context.quadraticCurveTo(points[at], points[at + 1], (points[at] + points[at + 2]) / 2, (points[at + 1] + points[at + 3]) / 2);
+      }
+      context.lineTo(points[base + (count - 1) * 2], points[base + (count - 1) * 2 + 1]);
+      context.stroke();
+    };
+    pane.lab = lab;
+    pane.solver = createCurrentSolver();
+    pane.solver.init(lab);
+    pane.manual = false;
+    pane.hand = null;
+    pane.press = null;
+    pane.blocked = null;
+    pane.autoTighten = ropes.map(() => 0);   // сколько шагов тапу ещё можно сматывать
+    pane.tautFor = ropes.map(() => 0);
+    pane.knobAngle = ropes.map(() => 0);
+    pane.activity = ropes.map(() => '');
+    pane.gestureLabel = '';
+    manualNote.textContent = '';
+    pane.stats = {retracts: 0, slips: 0, stretch: ropes.map(() => 0), sag: ropes.map(() => 0)};
+    canvas.style.aspectRatio = `${scene.size[0]} / ${scene.size[1]}`;
+  };
+
+  const chordOf = rope => {
+    const lab = pane.lab;
+    return Math.hypot(lab.pinX[lab.tailPin[rope]] - lab.pinX[lab.startPin[rope]], lab.pinY[lab.tailPin[rope]] - lab.pinY[lab.startPin[rope]]) / CELL;
+  };
+
+  // Смотать до `cells` клеток, но не дальше натяга и не короче прямой.
+  function reelIn(rope, cells) {
+    const wire = pane.lab.wires[rope];
+    if (pane.stats.stretch[rope] >= TAUT_AT) return false;
+    const next = Math.max(0.5, chordOf(rope), wire.length - cells);
+    if (next >= wire.length) return false;
+    pane.solver.setLength(pane.lab, rope, next);
+    pane.activity[rope] = 'сматывает';
+    return true;
+  }
+
+  function payOut(rope, cells) {
+    const wire = pane.lab.wires[rope];
+    pane.solver.setLength(pane.lab, rope, Math.min(LIMIT, wire.length + cells));
+    pane.activity[rope] = 'отдаёт';
+  }
+
+  pane.driven = () => {
+    if (pane.manual) return pane.hand ? pane.hand.pin : -1;
+    return pane.lab.tailPin[0];
+  };
+
+  pane.step = (time, scriptTarget) => {
+    const lab = pane.lab;
+    const pin = pane.driven();
+    const target = pane.manual ? (pane.hand ? {x: pane.hand.x, y: pane.hand.y} : null) : scriptTarget;
+    pane.activity = pane.activity.map(() => '');
+
+    // жест сценария: каждое окно исполняет его по-своему
+    pane.gestureLabel = '';
+    const gesture = scene.gesture;
+    if (!pane.manual && gesture && time >= gesture.at && time < gesture.at + gesture.duration) {
+      const first = time - gesture.at < STEP;
+      const rate = gesture.kind === 'full' ? AUTO_RATE : gesture.cells / (gesture.duration / STEP);
+      if (model.tap && gesture.kind === 'full') {
+        if (first) {
+          pane.autoTighten[0] = 180;
+          pane.stats.retracts++;
+        }
+        pane.gestureLabel = 'тап по старту';
+      } else if (model.tap) {
+        if (first) pane.stats.retracts++;
+        reelIn(0, rate);
+        pane.gestureLabel = 'держу старт';
+      } else if (model.knob) {
+        if (first) pane.stats.retracts++;
+        if (reelIn(0, rate)) pane.knobAngle[0] += rate / KNOB_CELLS * Math.PI * 2;
+        pane.gestureLabel = 'кручу катушку ↻';
+      } else {
+        pane.gestureLabel = 'жеста нет — уже натянут';
+      }
+    }
+
+    // удержание стартовой точки рукой
+    const press = pane.press;
+    if (press && press.kind === 'pin' && model.tap && press.rope >= 0 && !press.moved && performance.now() - press.at > 250) {
+      if (!press.holding) pane.stats.retracts++;
+      press.holding = true;
+      reelIn(press.rope, HOLD_RATE);
+    }
+    // Тап сматывает, пока натяг не продержится четверть секунды: у крючка натяг
+    // мелькает раньше, чем подтянется слабина с другой стороны.
+    pane.autoTighten.forEach((left, rope) => {
+      if (!left) return;
+      const settled = reelIn(rope, AUTO_RATE) ? 0 : (pane.tautFor[rope] || 0) + 1;
+      pane.tautFor[rope] = settled;
+      pane.autoTighten[rope] = settled >= 15 ? 0 : left - 1;
+    });
+
+    let saved = null;
+    if (pin >= 0 && target) {
+      const x = lab.pinX[pin];
+      const y = lab.pinY[pin];
+      const dx = target.x - x;
+      const dy = target.y - y;
+      const distance = Math.hypot(dx, dy);
+      const k = distance > HAND_SPEED ? HAND_SPEED / distance : 1;
+      const blocked = pane.blocked && pane.blocked.pin === pin && pane.blocked.ropes.some(rope => pane.stats.stretch[rope] >= TAUT_AT);
+      if (!blocked) {
+        pane.blocked = null;
+        saved = {x, y};
+        lab.pinX[pin] = x + dx * k;
+        lab.pinY[pin] = y + dy * k;
+      }
+    }
+
+    lab.grid.build(lab.pinX, lab.pinY, lab.pinCount);
+    pane.solver.step(STEP, lab);
+
+    const offending = [];
+    lab.wires.forEach((wire, rope) => {
+      const line = pane.solver.polyline(rope);
+      const path = polylineLength(line) / CELL;
+      const stretch = path / wire.length - 1;
+      pane.stats.stretch[rope] = stretch;
+      pane.stats.sag[rope] = sagOf(line) / CELL;
+
+      for (const ghost of lab.ghostPins[rope]) {
+        if (distanceToPolyline(line, lab.pinX[ghost], lab.pinY[ghost]) > CLEARANCE * 1.1) lab.ghostPins[rope].delete(ghost);
+      }
+
+      // рулетка: пока рука держит хвост, слабина сматывается следом
+      const tailHeld = pin === lab.tailPin[rope] && (!pane.manual || pane.hand?.active);
+      if (model.tape && tailHeld) {
+        const taut = path / (1 + TAUT_AT);
+        if (wire.length > taut + 0.01) {
+          pane.solver.setLength(lab, rope, Math.max(0.5, chordOf(rope), taut, wire.length - TAPE_RATE));
+          pane.activity[rope] = 'сматывает';
+          return;
+        }
+      }
+
+      // фрикцион
+      if (stretch > FRICTION_AT && wire.length < LIMIT) {
+        pane.solver.setLength(lab, rope, Math.min(LIMIT, path / (1 + FRICTION_AT)));
+        pane.activity[rope] = 'отдаёт';
+        return;
+      }
+      if (stretch <= BREAK_AT) return;
+      const contacts = [];
+      for (let other = 0; other < lab.pinCount; other++) {
+        if (lab.pinWire[other] === rope || lab.ghostPins[rope].has(other)) continue;
+        if (distanceToPolyline(line, lab.pinX[other], lab.pinY[other]) < CLEARANCE * 1.15) contacts.push({pin: other, at: distanceToPolyline.at});
+      }
+      if (!contacts.length) {
+        offending.push(rope);
+        return;
+      }
+      const release = contacts.find(contact => contact.pin === pin) || contacts.sort((a, b) => b.at - a.at)[0];
+      lab.ghostPins[rope].add(release.pin);
+      pane.stats.slips++;
+    });
+
+    if (offending.length && saved) {
+      lab.pinX[pin] = saved.x;
+      lab.pinY[pin] = saved.y;
+      pane.blocked = {pin, ropes: offending};
+    }
+    lab.wires.forEach((wire, rope) => wire.color = tensionColor(pane.stats.stretch[rope]));
+  };
+
+  const scale = () => canvas.clientWidth / (scene.size[0] * CELL);
+
+  pane.render = () => {
+    const lab = pane.lab;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const width = Math.round(canvas.clientWidth * dpr);
+    const height = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    const zoom = scale();
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.fillStyle = '#102cff';
+    context.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    context.strokeStyle = 'rgba(255,255,255,.22)';
+    context.lineWidth = 1;
+    context.beginPath();
+    for (let gx = 0; gx <= scene.size[0]; gx++) {
+      context.moveTo(Math.round(gx * CELL * zoom) + 0.5, 0);
+      context.lineTo(Math.round(gx * CELL * zoom) + 0.5, canvas.clientHeight);
+    }
+    for (let gy = 0; gy <= scene.size[1]; gy++) {
+      context.moveTo(0, Math.round(gy * CELL * zoom) + 0.5);
+      context.lineTo(canvas.clientWidth, Math.round(gy * CELL * zoom) + 0.5);
+    }
+    context.stroke();
+    context.save();
+    context.scale(zoom, zoom);
+    context.lineWidth = CELL;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    pane.solver.draw(context, lab);
+    const driven = pane.driven();
+    for (let pin = 0; pin < lab.pinCount; pin++) {
+      context.fillStyle = pin === driven ? ACCENT : INK;
+      context.beginPath();
+      context.arc(lab.pinX[pin], lab.pinY[pin], CELL / 2, 0, Math.PI * 2);
+      context.fill();
+    }
+    context.lineCap = 'butt';
+    lab.wires.forEach((wire, rope) => {
+      const cx = lab.pinX[lab.startPin[rope]];
+      const cy = lab.pinY[lab.startPin[rope]];
+      const share = Math.min(1, wire.length / LIMIT);
+      const active = pane.activity[rope];
+      context.lineWidth = 6;
+      context.strokeStyle = 'rgba(255,255,255,.28)';
+      context.beginPath();
+      context.arc(cx, cy, CELL * 0.78, 0, Math.PI * 2);
+      context.stroke();
+      context.strokeStyle = active === 'сматывает' ? '#00e69c' : active === 'отдаёт' ? '#ffffff' : ACCENT;
+      context.lineWidth = active ? 9 : 6;
+      context.beginPath();
+      context.arc(cx, cy, CELL * 0.78, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * share);
+      context.stroke();
+      if (model.knob) {
+        // кольцо-ручка с риской, которая поворачивается вместе с катушкой
+        context.setLineDash([5, 7]);
+        context.lineWidth = 2;
+        context.strokeStyle = INK;
+        context.beginPath();
+        context.arc(cx, cy, CELL * 1.35, 0, Math.PI * 2);
+        context.stroke();
+        context.setLineDash([]);
+        const angle = pane.knobAngle[rope] - Math.PI / 2;
+        context.fillStyle = INK;
+        context.beginPath();
+        context.arc(cx + Math.cos(angle) * CELL * 1.35, cy + Math.sin(angle) * CELL * 1.35, 6, 0, Math.PI * 2);
+        context.fill();
+      }
+    });
+    context.restore();
+    if (pane.gestureLabel) {
+      context.font = '600 12px Arial, sans-serif';
+      const text = '✋ ' + pane.gestureLabel;
+      const w = context.measureText(text).width + 16;
+      context.fillStyle = ACCENT;
+      context.fillRect(8, 8, w, 24);
+      context.fillStyle = '#102cff';
+      context.fillText(text, 16, 24);
+    }
+  };
+
+  pane.readout = () => {
+    const lab = pane.lab;
+    const worst = Math.max(...pane.stats.stretch) * 100;
+    const activity = pane.activity.find(Boolean);
+    stateLine.textContent = 'катушка: ' + (activity || (worst > 3 ? 'держит натяг' : 'держит длину'));
+    const rows = [
+      ['длина, кл.', lab.wires.map(wire => wire.length.toFixed(1)).join(' · ')],
+      ['провис, кл.', pane.stats.sag.map(sag => sag.toFixed(1)).join(' · ')],
+      ['натяжение', `${Math.max(0, worst).toFixed(0)} %`, worst > 10],
+      ['сматываний / срывов', `${pane.stats.retracts} / ${pane.stats.slips}`]
+    ];
+    readouts.innerHTML = rows.map(([label, value, hot]) => `<div class="row${hot ? ' hot' : ''}"><span>${label}</span><b>${value}</b></div>`).join('');
+  };
+
+  // ------------------------------------------------------------ рука
+
+  const toWorld = event => {
+    const rect = canvas.getBoundingClientRect();
+    const zoom = scale();
+    return {x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom};
+  };
+  const takeOver = () => {
+    pane.manual = true;
+    manualNote.textContent = 'ручное управление · «заново» вернёт сценарий';
+  };
+
+  canvas.addEventListener('pointerdown', event => {
+    const lab = pane.lab;
+    const point = toWorld(event);
+    let best = -1;
+    let bestDistance = Infinity;
+    for (let pin = 0; pin < lab.pinCount; pin++) {
+      const d = Math.hypot(point.x - lab.pinX[pin], point.y - lab.pinY[pin]);
+      if (d < bestDistance) {
+        best = pin;
+        bestDistance = d;
+      }
+    }
+    const rope = lab.startPin.indexOf(best);
+    if (model.knob && rope >= 0 && bestDistance > CELL * 0.6 && bestDistance < CELL * 1.9) {
+      pane.press = {kind: 'knob', rope, angle: Math.atan2(point.y - lab.pinY[best], point.x - lab.pinX[best])};
+      pane.stats.retracts++;
+    } else if (bestDistance < CELL * 1.2) {
+      pane.press = {kind: 'pin', pin: best, rope, x: event.clientX, y: event.clientY, at: performance.now(), moved: false, holding: false};
+      pane.hand = {pin: best, x: lab.pinX[best], y: lab.pinY[best], active: true};
+      pane.blocked = null;
+    } else return;
+    takeOver();
+    canvas.classList.add('grabbing');
+    canvas.setPointerCapture(event.pointerId);
+  });
+
+  canvas.addEventListener('pointermove', event => {
+    const press = pane.press;
+    if (!press) return;
+    const lab = pane.lab;
+    const point = toWorld(event);
+    if (press.kind === 'knob') {
+      const pin = lab.startPin[press.rope];
+      const angle = Math.atan2(point.y - lab.pinY[pin], point.x - lab.pinX[pin]);
+      let delta = angle - press.angle;
+      if (delta > Math.PI) delta -= Math.PI * 2;
+      if (delta < -Math.PI) delta += Math.PI * 2;
+      press.angle = angle;
+      const cells = Math.abs(delta) / (Math.PI * 2) * KNOB_CELLS;
+      if (delta > 0) {
+        if (reelIn(press.rope, cells)) pane.knobAngle[press.rope] += delta;
+      } else {
+        payOut(press.rope, cells);
+        pane.knobAngle[press.rope] += delta;
+      }
+      return;
+    }
+    if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 5) press.moved = true;
+    if (press.holding) return;
+    pane.hand.x = Math.max(0, Math.min(scene.size[0] * CELL, point.x));
+    pane.hand.y = Math.max(0, Math.min(scene.size[1] * CELL, point.y));
+  });
+
+  const release = () => {
+    const press = pane.press;
+    canvas.classList.remove('grabbing');
+    pane.press = null;
+    if (!press || press.kind !== 'pin') return;
+    pane.hand.active = false;
+    const tap = !press.moved && !press.holding && performance.now() - press.at < 250;
+    if (model.tap && press.rope >= 0 && (tap || press.holding)) {
+      if (tap) {
+        pane.autoTighten[press.rope] = 180;
+        pane.stats.retracts++;
+      }
+      pane.hand = null;
+    }
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  return pane;
+}
+
+// ---------------------------------------------------------------- сборка
+
+const panes = MODELS.map(model => createPane(document.getElementById('panes'), model));
+let clock = 0;
+let accumulator = 0;
+let slow = false;
+
+const chips = document.getElementById('scenarios');
+for (const item of SCENES) {
+  const chip = document.createElement('button');
+  chip.className = 'chip';
+  chip.type = 'button';
+  chip.textContent = item.label;
+  chip.setAttribute('aria-pressed', String(item === scene));
+  chip.onclick = () => {
+    scene = item;
+    for (const sibling of chips.children) sibling.setAttribute('aria-pressed', String(sibling === chip));
+    restart();
+  };
+  chips.append(chip);
+}
+
+function restart() {
+  clock = 0;
+  accumulator = 0;
+  document.getElementById('scenarioNote').textContent = scene.note + ' Сценарий повторяется; схватите точку, чтобы попробовать самому — только в этом окне.';
+  panes.forEach(pane => pane.load());
+}
+
+const slowButton = document.getElementById('slow');
+slowButton.onclick = () => {
+  slow = !slow;
+  slowButton.setAttribute('aria-pressed', String(slow));
+};
+document.getElementById('restart').onclick = restart;
+
+function tickAll() {
+  clock += STEP;
+  if (clock > scene.duration) {
+    clock = 0;
+    panes.forEach(pane => { if (!pane.manual) pane.load(); });
+  }
+  const point = scene.drive(clock);
+  const target = {x: (point.x + 0.5) * CELL, y: (point.y + 0.5) * CELL};
+  panes.forEach(pane => pane.step(clock, target));
+}
+
+restart();
+let previous = performance.now();
+let readoutAt = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  accumulator += Math.min(0.1, (now - previous) / 1000) * (slow ? 0.25 : 1);
+  previous = now;
+  let steps = 0;
+  while (accumulator >= STEP && steps < 4) {
+    accumulator -= STEP;
+    tickAll();
+    steps++;
+  }
+  if (!steps) return;
+  panes.forEach(pane => pane.render());
+  if (now - readoutAt > 250) {
+    readoutAt = now;
+    panes.forEach(pane => pane.readout());
+  }
+}
+requestAnimationFrame(loop);
+window.panes = panes;  // консоль браузера — часть инструментария демо
+window.tickAll = tickAll;
+window.restartLab = restart;
+</script>
+</body>
+</html>

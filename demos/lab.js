@@ -272,6 +272,8 @@ export function solveSegmentPins(lab, chains, options) {
           for (let slot = counts[cell]; slot < end; slot++) {
             const pin = items[slot];
             if (lab.pinWire[pin] === wire) continue;
+            // пара, которую полигон решений отпустил: жгут проходит под пином
+            if (lab.ghost && lab.ghost[wire] === pin) continue;
             const pinX = lab.pinX[pin];
             const pinY = lab.pinY[pin];
             let t = ((pinX - pos[a]) * spanX + (pinY - pos[a + 1]) * spanY) / spanSquared;

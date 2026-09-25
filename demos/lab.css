@@ -48,6 +48,9 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border:0;border-radiu
 .hub .logo small{display:block;font-size:10px;letter-spacing:.14em;margin-top:10px;font-weight:400}
 .hub .intro{max-width:640px;font-size:14px;line-height:1.5;opacity:.86;margin:0 0 34px}
 .hub .intro a{color:inherit}
+.hub-section{margin:34px 0 14px;font-size:20px;letter-spacing:-.4px}
+.hub-section small{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;font-weight:400;opacity:.72;margin-top:6px}
+.hub code{font:12px var(--mono)}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
 .card{display:block;color:inherit;text-decoration:none;border:1px solid var(--ink);padding:16px 16px 18px;background:color-mix(in srgb,var(--bg) 82%,transparent)}
 .card:hover{background:var(--ink);color:var(--bg)}
@@ -57,6 +60,46 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border:0;border-radiu
 .card dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.06em}
 .card dt{opacity:.65}
 .card dd{margin:0;font:11px var(--mono);letter-spacing:0}
+
+/* полигоны решений */
+html:has(body.deck){height:auto;overflow:auto}
+body.deck{height:auto;overflow:visible}
+.deck{padding:40px 22px 70px}
+.deck-inner{max-width:1180px;margin:0 auto}
+.deck .logo{font-size:30px;line-height:.9;letter-spacing:-1.6px;font-weight:700;margin:16px 0 10px}
+.deck .logo small{display:block;font-size:10px;letter-spacing:.14em;margin-top:10px;font-weight:400}
+.deck .intro{max-width:700px;font-size:14px;line-height:1.5;opacity:.88;margin:0 0 18px}
+.deck .intro a{color:inherit}
+.bar{position:sticky;top:0;z-index:3;display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px 0;background:var(--bg)}
+.bar .toggle{width:auto;padding:0 14px}
+.question{margin-top:34px;border-top:1px solid var(--ink);padding-top:18px}
+.question h2{margin:0 0 8px;font-size:22px;letter-spacing:-.5px}
+.question h2 small{display:block;font-size:10px;letter-spacing:.14em;font-weight:400;opacity:.75;margin-bottom:6px}
+.question > p{max-width:720px;margin:0 0 14px;font-size:14px;line-height:1.5;opacity:.88}
+.scenarios{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.scenarios .chip{flex:none;padding:0 12px;font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.scenario-note{font-size:13px;line-height:1.45;opacity:.85;margin:0 0 14px;min-height:1.45em}
+.panes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.pane{border:1px solid var(--ink);display:flex;flex-direction:column}
+.pane canvas{display:block;width:100%;touch-action:none;cursor:grab;border-bottom:1px solid var(--ink)}
+.pane canvas.grabbing{cursor:grabbing}
+.pane-text{padding:12px 13px 14px;display:flex;flex-direction:column;gap:8px;flex:1}
+.pane h3{margin:0;font-size:17px;letter-spacing:-.3px}
+.pane h3 small{font:11px var(--mono);opacity:.7;margin-right:6px}
+.pane p{margin:0;font-size:12.5px;line-height:1.45;opacity:.88}
+.pane p b{font-weight:700}
+.readouts{margin-top:auto;padding-top:8px;border-top:1px solid rgba(255,255,255,.38)}
+.manual{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);min-height:1.2em}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.85;margin:0 0 12px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-2px;margin-right:6px;background:var(--ink)}
+.legend i.probe{background:var(--accent)}
+.legend i.reel{background:none;border:3px solid var(--accent);width:14px;height:14px}
+.legend i.lock{background:none;border:3px solid var(--ink);width:14px;height:14px}
+.foot{margin-top:40px;font-size:13px;line-height:1.5;opacity:.85;max-width:720px}
+.foot a{color:inherit}
+.panes.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:1000px){.panes.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:700px){.panes,.panes.four{grid-template-columns:1fr}}
 
 @media (max-width:960px){
   .lab-head{max-width:56vw}

@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>Полигон решений — WIRES</title>
+<link rel="stylesheet" href="lab.css">
+</head>
+<body class="deck">
+<div class="deck-inner">
+  <a class="back" href="index.html">← лаборатория</a>
+  <p class="logo">Полигон решений<small>ДВА ВОПРОСА ПРО КОЛЛИЗИИ · КАЖДЫЙ ВАРИАНТ НА ОДНОЙ И ТОЙ ЖЕ СЦЕНЕ</small></p>
+  <p class="intro">
+    Маленькие сцены стоят рядом и идут по одним часам: жёлтый пин двигается одинаково во всех трёх окнах,
+    а различается только способ счёта. Жёлтый пин можно схватить и потаскать самому.
+    Цифры под окном считаются по тому, что нарисовано, поэтому сравнимы между вариантами.
+  </p>
+  <div class="legend"><span><i></i>пин</span><span><i class="probe"></i>пин, который двигается</span></div>
+  <div class="bar">
+    <button class="toggle" type="button" id="slow" aria-pressed="false">замедлить ×4</button>
+    <button class="toggle" type="button" id="restart">заново</button>
+  </div>
+
+  <section class="question">
+    <h2><small>ВОПРОС 1</small>Чем считать жгут</h2>
+    <p>
+      От этого зависит всё остальное: как жгут болтается, дрожит ли он на пине и может ли проскочить сквозь пин.
+      Выберите ситуацию и смотрите, какое окно ведёт себя так, как вы ждёте от жгута.
+    </p>
+    <div class="scenarios" id="scenarios"></div>
+    <p class="scenario-note" id="scenarioNote"></p>
+    <div class="panes" id="q1"></div>
+  </section>
+
+  <section class="question">
+    <h2><small>ВОПРОС 2</small>Пин давит на натянутый жгут</h2>
+    <p>
+      Жгут почти без слабины, и длины не хватает, чтобы обогнуть пин. Честного решения тут нет: что-то должно уступить.
+      Первое окно показывает, что происходит сейчас: правила нет, и жгут растягивается как резинка.
+      Окна 1–3 считаются одним солвером (вариант B, XPBD), и разница между ними только в правиле на этот случай.
+    </p>
+    <div class="panes four" id="q2"></div>
+  </section>
+
+  <p class="foot">
+    Большие демо на сотни жгутов с ползунками и телеметрией лежат в <a href="index.html">лаборатории</a>,
+    а подробный разбор — в <a href="../docs/PHYSICS_RESEARCH.md">docs/PHYSICS_RESEARCH.md</a>.
+  </p>
+</div>
+
+<script type="module">
+import {CELL, CLEARANCE, PinGrid, solveSegmentPins} from './lab.js';
+import {createCurrentSolver} from './solvers/current.js';
+import {createXpbdSolver} from './solvers/xpbd.js';
+import {createTautSolver} from './solvers/taut.js';
+
+const INK = '#f8f5ed';
+const ACCENT = '#ffc642';
+const WIRE = '#f200e9';
+const STEP = 1 / 60;
+
+const XPBD_PARAMS = {substeps: 8, iterations: 1, restorePasses: 2, compliance: -8, drag: 3.7, friction: 0.35, bounce: 0, slop: 1.75, beta: 0.4, collisions: true, perSubstep: false};
+// Режим «тянется»: жгут податлив, контакты на каждом подшаге, иначе жёсткая
+// длина протаскивает его сквозь пин между контактными фазами.
+const STRETCH_PARAMS = {...XPBD_PARAMS, compliance: -5, perSubstep: true};
+const TAUT_PARAMS = {tilt: 0, drag: 1.1, bounce: 0.15};
+
+// ---------------------------------------------------------------- сценарии
+// Координаты в клетках, пин стоит в центре клетки. `probe(t)` — путь жёлтого пина.
+
+const wave = (t, period) => 0.5 - 0.5 * Math.cos(2 * Math.PI * t / period);
+
+const SCENARIOS = [
+  {
+    id: 'sag',
+    label: 'пин через провис',
+    note: 'Пин медленно поднимается снизу сквозь провисший жгут и возвращается. Ждём: жгут ложится на пин и едет вместе с ним, пин не оказывается внутри жгута.',
+    size: [11, 9],
+    wires: [{x: 1, y: 2, endX: 9, endY: 2, length: 11}],
+    probe: t => ({x: 5, y: 8.2 - 7.4 * wave(t, 6)})
+  },
+  {
+    id: 'jerk',
+    label: 'резкий рывок',
+    note: 'Пин за 0.4 секунды пролетает снизу вверх сквозь закреплённый жгут и так же резко возвращается. Смотрите на «растяжение»: хороший вариант не тянет жгут как резинку.',
+    size: [11, 9],
+    wires: [{x: 1, y: 3, endX: 9, endY: 3, length: 9.5}],
+    probe: t => {
+      const phase = t % 3;
+      if (phase < 0.4) return {x: 5, y: 8 - 7.5 * phase / 0.4};
+      if (phase < 1.5) return {x: 5, y: 0.5};
+      if (phase < 1.9) return {x: 5, y: 0.5 + 7.5 * (phase - 1.5) / 0.4};
+      return {x: 5, y: 8};
+    }
+  },
+  {
+    id: 'bundle',
+    label: 'пучок',
+    note: 'Три жгута висят друг над другом, пин проходит снизу сквозь весь пучок. Жгуты должны разъехаться по сторонам пина, а не пропустить его сквозь себя.',
+    size: [11, 9],
+    wires: [
+      {x: 1, y: 2, endX: 9, endY: 2, length: 9},
+      {x: 1, y: 3, endX: 9, endY: 3, length: 9},
+      {x: 1, y: 4, endX: 9, endY: 4, length: 9}
+    ],
+    probe: t => ({x: 4.6, y: 8.3 - 7.8 * wave(t, 5)})
+  },
+  {
+    id: 'rest',
+    label: 'жгут лежит на пине',
+    note: 'Ничего не двигается: жгут провис и лёг на неподвижный пин. Ждём полный покой. Смотрите на «движение жгута»: всё, что больше нуля, солвер придумал сам. Здесь все три варианта уже справляются.',
+    size: [11, 9],
+    wires: [{x: 1, y: 2, endX: 9, endY: 2, length: 11}],
+    pins: [{x: 5, y: 4}]
+  },
+  {
+    id: 'orbit',
+    label: 'пин кружит',
+    note: 'Пин ходит кругом вокруг начала свободного жгута. Жгут должен наматываться и сматываться, а не проходить сквозь пин.',
+    size: [11, 9],
+    wires: [{x: 5, y: 3, length: 5}],
+    probe: t => {
+      const angle = 2 * Math.PI * t / 4 + Math.PI / 2;
+      return {x: 5 + Math.cos(angle) * 2.6, y: 3 + Math.sin(angle) * 2.6};
+    }
+  }
+];
+
+const TAUT_SCENE = {
+  size: [11, 9],
+  id: 'press',
+  wires: [{x: 2, y: 4, endX: 8, endY: 4, length: 6.5}],
+  probe: t => ({x: 5, y: 8 - 7 * wave(t, 7)})
+};
+
+// ---------------------------------------------------------------- геометрия
+
+function distanceToPolyline(points, x, y) {
+  let best = Infinity;
+  for (let i = 0; i + 3 < points.length; i += 2) {
+    const ax = points[i], ay = points[i + 1], bx = points[i + 2], by = points[i + 3];
+    const sx = bx - ax, sy = by - ay;
+    const t = Math.max(0, Math.min(1, ((x - ax) * sx + (y - ay) * sy) / (sx * sx + sy * sy || 1)));
+    const d = Math.hypot(ax + sx * t - x, ay + sy * t - y);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function polylineLength(points) {
+  let length = 0;
+  for (let i = 0; i + 3 < points.length; i += 2) length += Math.hypot(points[i + 2] - points[i], points[i + 3] - points[i + 1]);
+  return length;
+}
+
+// ---------------------------------------------------------------- окно
+
+function createPane(host, spec) {
+  const article = document.createElement('article');
+  article.className = 'pane';
+  article.innerHTML = `<canvas></canvas><div class="pane-text"><h3><small>${spec.tag}</small>${spec.title}</h3>${spec.text}<div class="manual"></div><div class="readouts"></div></div>`;
+  host.append(article);
+  const canvas = article.querySelector('canvas');
+  const context = canvas.getContext('2d', {alpha: false});
+  const readouts = article.querySelector('.readouts');
+  const manualNote = article.querySelector('.manual');
+
+  const pane = {spec, lab: null, solver: null, scene: null, manual: false, stats: null};
+  let drawn = [];
+
+  pane.load = scene => {
+    pane.scene = scene;
+    pane.manual = false;
+    manualNote.textContent = '';
+    const wires = scene.wires.map(wire => ({...wire, color: WIRE}));
+    const extra = (scene.pins || []).length + (scene.probe ? 1 : 0);
+    const total = wires.reduce((sum, wire) => sum + (wire.endX === undefined ? 1 : 2), 0) + extra;
+    const lab = {
+      wires,
+      pinX: new Float64Array(total),
+      pinY: new Float64Array(total),
+      pinWire: new Int32Array(total),
+      startPin: new Int32Array(wires.length),
+      tailPin: new Int32Array(wires.length).fill(-1),
+      pinCount: total,
+      probe: -1,
+      grid: new PinGrid(CELL * 2),
+      params: {...spec.params},
+      gravity: {x: 0, y: 792},
+      cell: CELL,
+      clearance: CLEARANCE,
+      ghost: new Int32Array(wires.length).fill(-1),
+      strokeWire: null
+    };
+    let cursor = 0;
+    const place = (x, y, owner) => {
+      lab.pinX[cursor] = (x + 0.5) * CELL;
+      lab.pinY[cursor] = (y + 0.5) * CELL;
+      lab.pinWire[cursor] = owner;
+      return cursor++;
+    };
+    wires.forEach((wire, index) => {
+      lab.startPin[index] = place(wire.x, wire.y, index);
+      if (wire.endX !== undefined) lab.tailPin[index] = place(wire.endX, wire.endY, index);
+    });
+    for (const pin of scene.pins || []) place(pin.x, pin.y, -1);
+    if (scene.probe) {
+      const start = scene.probe(0);
+      lab.probe = place(start.x, start.y, -1);
+    }
+    lab.strokeWire = (points, start, count, color) => {
+      const index = drawn.length;
+      drawn.push(points.slice(start * 2, (start + count) * 2));
+      if (count < 2) return;
+      context.globalAlpha = lab.ghost[index] >= 0 ? 0.42 : 1;
+      context.strokeStyle = color;
+      context.beginPath();
+      const base = start * 2;
+      context.moveTo(points[base], points[base + 1]);
+      for (let i = 1; i < count - 1; i++) {
+        const at = base + i * 2;
+        context.quadraticCurveTo(points[at], points[at + 1], (points[at] + points[at + 2]) / 2, (points[at + 1] + points[at + 3]) / 2);
+      }
+      context.lineTo(points[base + (count - 1) * 2], points[base + (count - 1) * 2 + 1]);
+      context.stroke();
+      context.globalAlpha = 1;
+    };
+    pane.lab = lab;
+    pane.solver = spec.makeSolver();
+    pane.solver.init(lab);
+    pane.policy = spec.policy ? spec.policy() : null;
+    pane.stats = {frames: 0, inside: 0, stretch: 0, jitter: 0, previous: null, lag: 0};
+    const [cols, rows] = scene.size;
+    canvas.style.aspectRatio = `${cols} / ${rows}`;
+  };
+
+  pane.step = time => {
+    const lab = pane.lab;
+    let target = null;
+    if (lab.probe >= 0) {
+      target = pane.manual ? pane.manualTarget : pane.scene.probe(time);
+      target = {x: (target.x + 0.5) * CELL, y: (target.y + 0.5) * CELL};
+      if (pane.policy?.moveProbe) pane.policy.moveProbe(pane, target);
+      else {
+        lab.pinX[lab.probe] = target.x;
+        lab.pinY[lab.probe] = target.y;
+      }
+    }
+    lab.grid.build(lab.pinX, lab.pinY, lab.pinCount);
+    pane.solver.step(STEP, lab);
+    if (pane.policy?.after) pane.policy.after(pane);
+    pane.stats.lag = target ? Math.hypot(target.x - lab.pinX[lab.probe], target.y - lab.pinY[lab.probe]) / CELL : 0;
+  };
+
+  function resize() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const width = Math.round(canvas.clientWidth * dpr);
+    const height = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    return dpr;
+  }
+
+  const scale = () => canvas.clientWidth / (pane.scene.size[0] * CELL);
+
+  pane.render = () => {
+    const lab = pane.lab;
+    const dpr = resize();
+    const zoom = scale();
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.fillStyle = '#102cff';
+    context.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    context.strokeStyle = 'rgba(255,255,255,.22)';
+    context.lineWidth = 1;
+    context.beginPath();
+    for (let x = 0; x <= pane.scene.size[0]; x++) {
+      context.moveTo(Math.round(x * CELL * zoom) + 0.5, 0);
+      context.lineTo(Math.round(x * CELL * zoom) + 0.5, canvas.clientHeight);
+    }
+    for (let y = 0; y <= pane.scene.size[1]; y++) {
+      context.moveTo(0, Math.round(y * CELL * zoom) + 0.5);
+      context.lineTo(canvas.clientWidth, Math.round(y * CELL * zoom) + 0.5);
+    }
+    context.stroke();
+    context.save();
+    context.scale(zoom, zoom);
+    context.lineWidth = CELL;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    drawn = [];
+    pane.solver.draw(context, lab);
+    for (let pin = 0; pin < lab.pinCount; pin++) {
+      context.fillStyle = pin === lab.probe ? ACCENT : INK;
+      context.beginPath();
+      context.arc(lab.pinX[pin], lab.pinY[pin], CELL / 2, 0, Math.PI * 2);
+      context.fill();
+    }
+    context.restore();
+    measure();
+  };
+
+  // Метрики по нарисованному: одинаково честны для частиц и для геометрии.
+  function measure() {
+    const lab = pane.lab;
+    const stats = pane.stats;
+    stats.frames++;
+    let inside = false;
+    for (let pin = 0; pin < lab.pinCount; pin++) {
+      if (lab.pinWire[pin] >= 0) continue;
+      for (const line of drawn) {
+        if (distanceToPolyline(line, lab.pinX[pin], lab.pinY[pin]) < CELL * 0.5) inside = true;
+      }
+    }
+    if (inside) stats.inside++;
+    let stretch = 0;
+    drawn.forEach((line, index) => {
+      const rope = lab.wires[index].length * CELL;
+      stretch = Math.max(stretch, polylineLength(line) / rope - 1);
+    });
+    stats.stretch = stats.stretch * 0.9 + Math.max(0, stretch) * 100 * 0.1;
+    let moved = 0;
+    let count = 0;
+    if (stats.previous && stats.previous.length === drawn.length) {
+      drawn.forEach((line, index) => {
+        const before = stats.previous[index];
+        if (before.length !== line.length) return;
+        for (let i = 0; i < line.length; i += 2) {
+          moved += Math.hypot(line[i] - before[i], line[i + 1] - before[i + 1]);
+          count++;
+        }
+      });
+    }
+    if (count) stats.jitter = stats.jitter * 0.95 + (moved / count) * 0.05;
+    stats.previous = drawn;
+  }
+
+  pane.readout = () => {
+    const stats = pane.stats;
+    const rows = [
+      ['пин внутри жгута', `${stats.frames ? Math.round(stats.inside / stats.frames * 100) : 0} % времени`, stats.inside > 0],
+      ['растяжение', `${stats.stretch.toFixed(1)} %`, stats.stretch > 3],
+      ['движение жгута', `${stats.jitter.toFixed(2)} px/кадр`, pane.scene.id === 'rest' && stats.jitter > 0.05]
+    ];
+    if (spec.showLag) rows.push(['пин отстал от руки', `${stats.lag.toFixed(1)} кл.`, stats.lag > 0.5]);
+    readouts.innerHTML = rows.map(([label, value, hot]) => `<div class="row${hot ? ' hot' : ''}"><span>${label}</span><b>${value}</b></div>`).join('');
+  };
+
+  // Жёлтый пин можно взять рукой. После этого сценарий в окне останавливается до «заново».
+  let grabbing = false;
+  const toWorld = event => {
+    const rect = canvas.getBoundingClientRect();
+    const zoom = scale();
+    return {x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom};
+  };
+  canvas.addEventListener('pointerdown', event => {
+    const lab = pane.lab;
+    if (lab.probe < 0) return;
+    const point = toWorld(event);
+    if (Math.hypot(point.x - lab.pinX[lab.probe], point.y - lab.pinY[lab.probe]) > CELL * 1.3) return;
+    grabbing = true;
+    canvas.setPointerCapture(event.pointerId);
+    canvas.classList.add('grabbing');
+    pane.manual = true;
+    pane.manualTarget = {x: lab.pinX[lab.probe] / CELL - 0.5, y: lab.pinY[lab.probe] / CELL - 0.5};
+    manualNote.textContent = 'ручное управление · «заново» вернёт сценарий';
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (!grabbing) return;
+    const point = toWorld(event);
+    const [cols, rows] = pane.scene.size;
+    pane.manualTarget = {
+      x: Math.max(-0.5, Math.min(cols - 0.5, point.x / CELL - 0.5)),
+      y: Math.max(-0.5, Math.min(rows - 0.5, point.y / CELL - 0.5))
+    };
+  });
+  const release = () => {
+    grabbing = false;
+    canvas.classList.remove('grabbing');
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+
+  return pane;
+}
+
+// ---------------------------------------------------------------- правила для вопроса 2
+
+// Насколько жёлтый пин залез в каждый жгут. Больше порога — длины не хватает.
+const TOO_DEEP = CELL * 0.72;
+function probeDistances(pane, x = pane.lab.pinX[pane.lab.probe], y = pane.lab.pinY[pane.lab.probe]) {
+  const {pos, offset} = pane.solver.chains;
+  return pane.lab.wires.map((wire, w) => distanceToPolyline(pos.subarray(offset[w] * 2, offset[w + 1] * 2), x, y));
+}
+
+const stretchPolicy = () => ({
+  // Контакт главнее длины: после солвера жгут дожимается из пина полностью.
+  after(pane) {
+    const {lab, solver} = pane;
+    for (let pass = 0; pass < 6; pass++) {
+      solveSegmentPins(lab, solver.chains, {clearance: CLEARANCE, prev: solver.chains.prev, slop: 0, beta: 1, maxPush: CELL});
+    }
+  }
+});
+
+const slipPolicy = () => ({
+  // Длина главнее контакта: когда обогнуть нельзя, пара «жгут — пин» отпускается,
+  // пока пин не выйдет из жгута с другой стороны.
+  after(pane) {
+    const lab = pane.lab;
+    probeDistances(pane).forEach((distance, w) => {
+      if (lab.ghost[w] < 0 && distance < TOO_DEEP) lab.ghost[w] = lab.probe;
+      else if (lab.ghost[w] >= 0 && distance > CLEARANCE * 1.05) lab.ghost[w] = -1;
+    });
+  }
+});
+
+const blockPolicy = () => ({
+  safe: null,
+  blocked: false,
+  // Жгут — препятствие для пина: пин идёт к руке мелкими шагами и откатывается,
+  // если очередной шаг вдавил его в жгут глубже порога. Упёршись, он не делает
+  // шагов к жгуту, пока рука не поведёт его прочь, — иначе толчок и откат
+  // чередуются каждый кадр и жгут дрожит.
+  moveProbe(pane, target) {
+    const lab = pane.lab;
+    const x = lab.pinX[lab.probe];
+    const y = lab.pinY[lab.probe];
+    const dx = target.x - x;
+    const dy = target.y - y;
+    const distance = Math.hypot(dx, dy);
+    const limit = CELL * 0.25;
+    const k = distance > limit ? limit / distance : 1;
+    const nextX = x + dx * k;
+    const nextY = y + dy * k;
+    if (this.blocked) {
+      const now = Math.min(...probeDistances(pane));
+      const next = Math.min(...probeDistances(pane, nextX, nextY));
+      if (next < now) {
+        this.safe = null;
+        return;
+      }
+      this.blocked = false;
+    }
+    this.safe = {x, y};
+    lab.pinX[lab.probe] = nextX;
+    lab.pinY[lab.probe] = nextY;
+  },
+  after(pane) {
+    const lab = pane.lab;
+    if (this.safe && probeDistances(pane).some(distance => distance < TOO_DEEP)) {
+      lab.pinX[lab.probe] = this.safe.x;
+      lab.pinY[lab.probe] = this.safe.y;
+      this.blocked = true;
+    }
+  }
+});
+
+// ---------------------------------------------------------------- сборка
+
+const q1 = [
+  {
+    tag: 'A', title: 'Сейчас в редакторе', makeSolver: createCurrentSolver, params: {collisions: true},
+    text: '<p>Цепочка точек. За кадр 10 проходов: точки подтягиваются друг к другу, и в тех же проходах пин их отталкивает. <b>Длина и пин спорят каждый проход</b>, и пин обычно побеждает: жгут не проскакивает, а <b>растягивается как резинка</b> (смотрите «резкий рывок»). Чтобы этот спор не раскачивал сцену, при включённых коллизиях всё движение сильно гасится, и жгут становится вязким.</p>'
+  },
+  {
+    tag: 'B', title: 'XPBD с подшагами', makeSolver: createXpbdSolver, params: XPBD_PARAMS,
+    text: '<p>Те же точки, но кадр режется на 8 мелких шагов. <b>Сначала</b> жгут двигается и держит длину, <b>потом</b> отдельно разводится с пинами, так что спора нет. Выглядит как сейчас, только спокойнее и без вязкости. Переход небольшой: меняется солвер, а не модель.</p>'
+  },
+  {
+    tag: 'C', title: 'Натянутая нить', makeSolver: createTautSolver, params: TAUT_PARAMS,
+    text: '<p>Точек нет. Жгут — это путь от начала к концу, огибающий пины, на которые он намотан, а провис дорисовывается дугой. <b>Прямую между концами пин не проскочит</b>, и это в 15 раз быстрее. Цена: провис только нарисован, поэтому пин проходит сквозь дугу, пока не дойдёт до этой прямой. Жгут больше не болтается и не пружинит, живой остаётся только кончик. Это другой характер.</p>'
+  }
+];
+
+const q2 = [
+  {
+    tag: '0', title: 'Сейчас, без правила', makeSolver: createCurrentSolver, params: {collisions: true}, showLag: true,
+    text: '<p>Солвер редактора как есть. Правила нет, и побеждает пин: <b>жгут растягивается</b> почти в полтора раза, а потом пружинит обратно. Это случайный результат спора длины и пина, а не решение.</p>'
+  },
+  {
+    tag: '1', title: 'Жгут тянется', makeSolver: createXpbdSolver, params: STRETCH_PARAMS, policy: stretchPolicy, showLag: true,
+    text: '<p>По сути это нынешнее поведение, только на новом солвере и как явное правило: жгуту разрешено тянуться, он огибает пин и потом возвращает длину. <b>Пин всегда снаружи.</b> Цена: пока пин давит, длина врёт, и жгут похож на резинку.</p>'
+  },
+  {
+    tag: '2', title: 'Жгут проскальзывает', makeSolver: createXpbdSolver, params: XPBD_PARAMS, policy: slipPolicy, showLag: true,
+    text: '<p>Длина главнее пина: когда обогнуть нельзя, жгут перестаёт замечать этот пин и уходит под него (становится полупрозрачным), пока пин не выйдет с другой стороны. <b>Длина честная, дёрганья нет.</b> Цена: на миг они пересекаются.</p>'
+  },
+  {
+    tag: '3', title: 'Пин упирается', makeSolver: createXpbdSolver, params: XPBD_PARAMS, policy: blockPolicy, showLag: true,
+    text: '<p>Натянутый жгут — стена для пина. Пин доходит до жгута и дальше не идёт, как бы его ни тянули, а по провисшему жгуту проходит свободно. <b>Ничего не нарушается.</b> Цена: пин не попадает туда, куда его ведут, и об этом надо сообщать в интерфейсе.</p>'
+  }
+];
+
+const q1Panes = q1.map(spec => createPane(document.getElementById('q1'), spec));
+const q2Panes = q2.map(spec => createPane(document.getElementById('q2'), spec));
+const allPanes = [...q1Panes, ...q2Panes];
+
+let scenario = SCENARIOS[0];
+let clock = 0;
+let accumulator = 0;
+let slow = false;
+
+const chips = document.getElementById('scenarios');
+for (const item of SCENARIOS) {
+  const chip = document.createElement('button');
+  chip.className = 'chip';
+  chip.type = 'button';
+  chip.textContent = item.label;
+  chip.setAttribute('aria-pressed', String(item === scenario));
+  chip.onclick = () => {
+    scenario = item;
+    for (const sibling of chips.children) sibling.setAttribute('aria-pressed', String(sibling === chip));
+    restart();
+  };
+  chips.append(chip);
+}
+
+function restart() {
+  clock = 0;
+  accumulator = 0;
+  document.getElementById('scenarioNote').textContent = scenario.note;
+  q1Panes.forEach(pane => pane.load(scenario));
+  q2Panes.forEach(pane => pane.load(TAUT_SCENE));
+}
+
+const slowButton = document.getElementById('slow');
+slowButton.onclick = () => {
+  slow = !slow;
+  slowButton.setAttribute('aria-pressed', String(slow));
+};
+document.getElementById('restart').onclick = restart;
+
+restart();
+let previous = performance.now();
+let readoutAt = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  accumulator += Math.min(0.1, (now - previous) / 1000) * (slow ? 0.25 : 1);
+  previous = now;
+  let steps = 0;
+  while (accumulator >= STEP && steps < 4) {
+    accumulator -= STEP;
+    clock += STEP;
+    allPanes.forEach(pane => pane.step(clock));
+    steps++;
+  }
+  if (!steps) return;
+  allPanes.forEach(pane => pane.render());
+  if (now - readoutAt > 250) {
+    readoutAt = now;
+    allPanes.forEach(pane => pane.readout());
+  }
+}
+requestAnimationFrame(loop);
+window.panes = allPanes;  // консоль браузера — часть инструментария демо
+</script>
+</body>
+</html>

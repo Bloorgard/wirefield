@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>Катушка и натяжение — WIRES</title>
+<link rel="stylesheet" href="lab.css">
+<style>
+.panes.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:1100px){.panes.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:700px){.panes.four{grid-template-columns:1fr}}
+.limit{display:flex;gap:6px;align-items:center;font-size:10px;text-transform:uppercase;letter-spacing:.07em;margin-left:6px}
+.limit .chip{flex:none;padding:0 10px;height:32px}
+.state{font:11px var(--mono);min-height:1.3em}
+</style>
+</head>
+<body class="deck">
+<div class="deck-inner">
+  <a class="back" href="index.html">← лаборатория</a>
+  <p class="logo">Катушка и натяжение<small>КАК ОБЪЕДИНИТЬ РАЗМАТЫВАНИЕ И СИГНАЛИЗАЦИЮ · ЧЕТЫРЕ СПОСОБА ВЫБРАТЬ «НАТЯНУТЬ» ИЛИ «УДЛИНИТЬ»</small></p>
+  <p class="intro">
+    Во всех четырёх окнах есть катушка на старте и видно натяжение: розовый — свободно, жёлтый — натянут, красный — на пределе.
+    Когда катушка пуста, шнур на пределе <b>срывается с зацепа, ближайшего к руке</b>, а без зацепов точка упирается.
+    Различается только то, <b>как решается, отдаёт катушка или держит</b>. Любую точку можно вести рукой в любом окне — окна независимы.
+  </p>
+  <div class="legend">
+    <span><i class="probe"></i>точка, которую ведут</span>
+    <span><i class="reel"></i>катушка: сколько размотано из предела</span>
+    <span><i class="lock"></i>тормоз: катушка держит</span>
+  </div>
+  <div class="bar">
+    <button class="toggle" type="button" id="slow" aria-pressed="false">замедлить ×4</button>
+    <button class="toggle" type="button" id="brake" aria-pressed="false">тормоз (или пробел)</button>
+    <button class="toggle" type="button" id="reel">смотать</button>
+    <button class="toggle" type="button" id="restart">заново</button>
+    <span class="limit">предел катушки<span class="chips" id="limits"></span></span>
+  </div>
+
+  <section class="question">
+    <div class="scenarios" id="scenarios"></div>
+    <p class="scenario-note" id="scenarioNote"></p>
+    <div class="panes four" id="panes"></div>
+  </section>
+
+  <section class="question">
+    <h2><small>КАК ЧИТАТЬ</small>Что пробовать руками</h2>
+    <p>
+      <b>Намотать и затянуть:</b> обведите хвостом крючки, потом потяните, чтобы шнур лёг плотно. Где это получается без лишних действий?
+      <b>Тормоз:</b> зажмите пробел (или кнопку «тормоз») и тяните — катушка держит. Тап по стартовой точке ставит замок только на этот шнур.
+      <b>Ремень:</b> тяните медленно, а потом дёрните.
+      <b>Предел:</b> в редакторе сейчас 48 клеток. На 96 полигон даёт шнуру до 128 точек вместо 64 — это и есть цена длинных шнуров.
+    </p>
+  </section>
+
+  <p class="foot">
+    Предыдущий полигон про длину — <a href="length.html">length.html</a>. Все демо — в <a href="index.html">лаборатории</a>.
+  </p>
+</div>
+
+<script type="module">
+import {CELL, CLEARANCE, PinGrid} from './lab.js';
+import {createCurrentSolver} from './solvers/current.js';
+
+const INK = '#f8f5ed';
+const ACCENT = '#ffc642';
+const HOT = '#ff5a4e';
+const WIRE = '#f200e9';
+const STEP = 1 / 60;
+const FREE_AT = 0.03;           // свободная катушка: отдаёт почти сразу
+const FRICTION_AT = 0.12;       // фрикцион: отдаёт, только когда натяжение выше порога
+const BREAK_AT = 0.25;          // предел: шнур срывается с зацепа
+const BELT_SPEED = 8;           // ремень: рука быстрее 8 клеток/с — стопор
+const BELT_HOLD = 0.5;          // ремень: стопор держится полсекунды
+const HAND_SPEED = CELL * 0.3;  // рука не телепортируется: не больше 0.3 клетки за шаг
+const LIMITS = [24, 48, 96];
+
+// ---------------------------------------------------------------- сцены
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const along = (points, t) => {
+  let total = 0;
+  const lengths = [0];
+  for (let i = 1; i < points.length; i++) lengths.push(total += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+  const target = Math.max(0, Math.min(1, t)) * total;
+  let i = 1;
+  while (i < points.length - 1 && lengths[i] < target) i++;
+  const k = (target - lengths[i - 1]) / (lengths[i] - lengths[i - 1] || 1);
+  return {x: lerp(points[i - 1][0], points[i][0], k), y: lerp(points[i - 1][1], points[i][1], k)};
+};
+
+const SCENES = [
+  {
+    id: 'tighten',
+    label: 'намотать и затянуть',
+    note: 'Хвост медленно обходит три крючка (нужна длина), потом его резко дёргают влево в обход нижнего крючка: шнуру сразу нужно ещё около 4 клеток.',
+    size: [14, 10],
+    ropes: [{start: [1, 4], tail: [2, 6], length: 4}],
+    hooks: [[5, 2], [9, 4], [5, 7]],
+    duration: 12,
+    drive: {pin: 'tail0', path: t => {
+      if (t < 8) {
+        const angle = (150 + t / 8 * 330) * Math.PI / 180;
+        return {x: 6.5 + Math.cos(angle) * 4, y: 4.5 + Math.sin(angle) * 3.6};
+      }
+      const end = {x: 6.5 + Math.cos(480 * Math.PI / 180) * 4, y: 4.5 + Math.sin(480 * Math.PI / 180) * 3.6};
+      // рывок в обход последнего крючка: шнуру сразу нужно ещё ~4 клетки
+      return along([[end.x, end.y], [0.3, 9]], (t - 8) / 0.4);
+    }}
+  },
+  {
+    id: 'pull',
+    label: 'просто вытянуть',
+    note: 'Хвост медленно уводят вправо на 11 клеток и возвращают. Без крючков.',
+    size: [14, 10],
+    ropes: [{start: [1, 5], tail: [2, 5], length: 2}],
+    duration: 9,
+    drive: {pin: 'tail0', path: t => t < 4 ? along([[2, 5], [13, 5]], t / 4) : t < 5 ? {x: 13, y: 5} : along([[13, 5], [4, 5]], (t - 5) / 3)}
+  },
+  {
+    id: 'wind',
+    label: 'намотка до конца',
+    note: 'Хвост идёт по кругу снаружи четырёх крючков, почти два оборота — до конца катушки.',
+    size: [14, 10],
+    ropes: [{start: [1, 1], tail: [3, 3.6], length: 12}],
+    hooks: [[10, 5], [7, 8], [4, 5], [7, 2]],
+    duration: 16,
+    drive: {pin: 'tail0', path: t => {
+      const angle = (200 + Math.min(1, t / 14) * 600) * Math.PI / 180;
+      return {x: 7 + Math.cos(angle) * 4.2, y: 5 + Math.sin(angle) * 4.2};
+    }}
+  },
+  {
+    id: 'thread',
+    label: 'шнур через висящие',
+    note: 'Три шнура висят вертикально. Хвост нового шнура медленно ведут вправо сквозь них.',
+    size: [14, 10],
+    ropes: [
+      {start: [1, 4.5], tail: [2, 4.5], length: 14},
+      {start: [5, 1], tail: [5, 8], length: 7.6},
+      {start: [8, 1], tail: [8, 8], length: 7.6},
+      {start: [11, 1], tail: [11, 8], length: 7.6}
+    ],
+    duration: 9,
+    drive: {pin: 'tail0', path: t => along([[2, 4.5], [13, 4.5]], t / 7)}
+  },
+  {
+    id: 'ram',
+    label: 'таран пучка',
+    note: 'Три почти натянутых шнура лежат пучком. Свободный крючок снизу проводят вверх сквозь пучок.',
+    size: [14, 10],
+    ropes: [
+      {start: [1, 3], tail: [12, 3], length: 11.4},
+      {start: [1, 4], tail: [12, 4], length: 11.4},
+      {start: [1, 5], tail: [12, 5], length: 11.4}
+    ],
+    hooks: [[6.5, 8.5]],
+    duration: 8,
+    drive: {pin: 'hook0', path: t => along([[6.5, 8.5], [6.5, 0.5]], t / 6)}
+  }
+];
+
+// ---------------------------------------------------------------- модели
+// `payAt` — порог натяжения, с которого катушка отдаёт длину, или null, если держит.
+
+const MODELS = [
+  {
+    tag: '1', title: 'Фрикцион',
+    payAt: () => FRICTION_AT,
+    text: '<p>Режимов нет. Потянули — шнур натягивается и желтеет, длина не меняется. Тянете дальше порога — катушка начинает отдавать. <b>Натянуть — тянуть немного, удлинить — тянуть дальше.</b> Отпустили — длина зафиксирована.</p>'
+  },
+  {
+    tag: '2', title: 'Свободная катушка + тормоз',
+    payAt: (pane, rope) => braked(pane, rope) ? null : FREE_AT,
+    text: '<p>Катушка отдаёт сразу, натяжения почти не бывает. Чтобы натянуть, <b>зажмите тормоз</b>: пробел или кнопка наверху (на телефоне — второй палец), либо тап по стартовой точке — замок на этот шнур.</p>'
+  },
+  {
+    tag: '3', title: 'Фрикцион + тормоз',
+    payAt: (pane, rope) => braked(pane, rope) ? null : FRICTION_AT,
+    text: '<p>Как фрикцион, но <b>тормоз отключает катушку совсем</b>: можно затягивать сколько угодно сильно и точно не размотать ни сантиметра. Тормоз тот же — пробел, кнопка или замок тапом по старту.</p>'
+  },
+  {
+    tag: '4', title: 'Ремень безопасности',
+    payAt: pane => pane.beltLockedFor > 0 ? null : FREE_AT,
+    text: '<p>Решает скорость руки. <b>Тянете медленно — катушка отдаёт. Дёрнули — стопорится</b> на полсекунды, и шнур натягивается рывком. Никаких кнопок, но нужно чувствовать границу скорости.</p>'
+  }
+];
+
+let brakeButton = false;
+let spaceHeld = false;
+const braked = (pane, rope) => brakeButton || spaceHeld || pane.locked[rope];
+
+// ---------------------------------------------------------------- геометрия
+
+function distanceToPolyline(points, x, y) {
+  let best = Infinity;
+  let walked = 0;
+  let bestAt = 0;
+  for (let i = 0; i + 3 < points.length; i += 2) {
+    const ax = points[i], ay = points[i + 1], bx = points[i + 2], by = points[i + 3];
+    const sx = bx - ax, sy = by - ay;
+    const span = Math.hypot(sx, sy);
+    const t = Math.max(0, Math.min(1, ((x - ax) * sx + (y - ay) * sy) / (span * span || 1)));
+    const d = Math.hypot(ax + sx * t - x, ay + sy * t - y);
+    if (d < best) {
+      best = d;
+      bestAt = walked + span * t;
+    }
+    walked += span;
+  }
+  distanceToPolyline.at = bestAt;
+  return best;
+}
+
+function polylineLength(points) {
+  let length = 0;
+  for (let i = 0; i + 3 < points.length; i += 2) length += Math.hypot(points[i + 2] - points[i], points[i + 3] - points[i + 1]);
+  return length;
+}
+
+function mix(a, b, t) {
+  const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
+  return '#' + pa.map((v, i) => Math.round(lerp(v, pb[i], t)).toString(16).padStart(2, '0')).join('');
+}
+
+function tensionColor(stretch) {
+  const k = Math.max(0, Math.min(1, stretch / BREAK_AT));
+  return k < 0.5 ? mix(WIRE, ACCENT, k * 2) : mix(ACCENT, HOT, (k - 0.5) * 2);
+}
+
+// ---------------------------------------------------------------- окно
+
+let scene = SCENES[0];
+let limit = 48;
+let reeling = false;
+
+function createPane(host, model) {
+  const article = document.createElement('article');
+  article.className = 'pane';
+  article.innerHTML = `<canvas></canvas><div class="pane-text"><h3><small>${model.tag}</small>${model.title}</h3>${model.text}<div class="manual"></div><div class="state"></div><div class="readouts"></div></div>`;
+  host.append(article);
+  const canvas = article.querySelector('canvas');
+  const context = canvas.getContext('2d', {alpha: false});
+  const readouts = article.querySelector('.readouts');
+  const manualNote = article.querySelector('.manual');
+  const stateLine = article.querySelector('.state');
+  const pane = {model, canvas, hand: null};
+
+  pane.load = () => {
+    const ropes = scene.ropes;
+    const hooks = scene.hooks || [];
+    const total = ropes.length * 2 + hooks.length;
+    const lab = {
+      wires: ropes.map(rope => ({length: rope.length, color: WIRE})),
+      pinX: new Float64Array(total),
+      pinY: new Float64Array(total),
+      pinWire: new Int32Array(total),
+      startPin: new Int32Array(ropes.length),
+      tailPin: new Int32Array(ropes.length),
+      pinCount: total,
+      grid: new PinGrid(CELL * 2),
+      params: {collisions: true, maxPoints: limit > 48 ? 128 : 64},
+      gravity: {x: 0, y: 792},
+      cell: CELL,
+      clearance: CLEARANCE,
+      ghostPins: ropes.map(() => new Set()),
+      names: {}
+    };
+    let cursor = 0;
+    const place = ([x, y], owner, name) => {
+      lab.pinX[cursor] = (x + 0.5) * CELL;
+      lab.pinY[cursor] = (y + 0.5) * CELL;
+      lab.pinWire[cursor] = owner;
+      lab.names[name] = cursor;
+      return cursor++;
+    };
+    ropes.forEach((rope, index) => {
+      lab.startPin[index] = place(rope.start, index, 'start' + index);
+      lab.tailPin[index] = place(rope.tail, index, 'tail' + index);
+    });
+    hooks.forEach((hook, index) => place(hook, -1, 'hook' + index));
+    lab.strokeWire = (points, start, count, color) => {
+      context.strokeStyle = color;
+      context.beginPath();
+      const base = start * 2;
+      context.moveTo(points[base], points[base + 1]);
+      for (let i = 1; i < count - 1; i++) {
+        const at = base + i * 2;
+        context.quadraticCurveTo(points[at], points[at + 1], (points[at] + points[at + 2]) / 2, (points[at + 1] + points[at + 3]) / 2);
+      }
+      context.lineTo(points[base + (count - 1) * 2], points[base + (count - 1) * 2 + 1]);
+      context.stroke();
+    };
+    pane.lab = lab;
+    pane.solver = createCurrentSolver();
+    pane.solver.init(lab);
+    pane.blocked = null;
+    pane.hand = null;
+    pane.locked = ropes.map(() => false);
+    pane.paying = ropes.map(() => false);
+    pane.beltLockedFor = 0;
+    pane.handSpeed = 0;
+    pane.lastTarget = null;
+    manualNote.textContent = '';
+    pane.stats = {blocks: 0, slips: 0, paid: 0, stretch: ropes.map(() => 0), blockedNow: false};
+    canvas.style.aspectRatio = `${scene.size[0]} / ${scene.size[1]}`;
+  };
+
+  pane.driven = () => {
+    if (pane.hand) return pane.hand.pin;
+    return pane.lab.names[scene.drive.pin];
+  };
+
+  // Насколько хуже станет шнуру `rope`, если точку `pin` поставить в (x, y):
+  // для своего хвоста — оценка длины пути, для чужого пина — близость к шнуру.
+  function badness(rope, pin, x, y) {
+    const line = pane.solver.polyline(rope);
+    if (pin === pane.lab.tailPin[rope]) {
+      const n = line.length;
+      return polylineLength(line) - Math.hypot(line[n - 2] - line[n - 4], line[n - 1] - line[n - 3]) + Math.hypot(x - line[n - 4], y - line[n - 3]);
+    }
+    return -distanceToPolyline(line, x, y);
+  }
+
+  pane.step = scriptTarget => {
+    const lab = pane.lab;
+    const target = pane.hand ? {x: pane.hand.x, y: pane.hand.y} : scriptTarget;
+    const pin = pane.driven();
+
+    // скорость руки для ремня, клеток в секунду
+    if (pane.lastTarget) {
+      const speed = Math.hypot(target.x - pane.lastTarget.x, target.y - pane.lastTarget.y) / CELL / STEP;
+      pane.handSpeed = pane.handSpeed * 0.6 + speed * 0.4;
+    }
+    pane.lastTarget = {x: target.x, y: target.y};
+    if (pane.handSpeed > BELT_SPEED) pane.beltLockedFor = BELT_HOLD;
+    else pane.beltLockedFor = Math.max(0, pane.beltLockedFor - STEP);
+
+    let saved = null;
+    const x = lab.pinX[pin];
+    const y = lab.pinY[pin];
+    const dx = target.x - x;
+    const dy = target.y - y;
+    const distance = Math.hypot(dx, dy);
+    const k = distance > HAND_SPEED ? HAND_SPEED / distance : 1;
+    const nextX = x + dx * k;
+    const nextY = y + dy * k;
+    let allowed = true;
+    // Упёршись, точка не делает шагов, которые сделают упор хуже, — иначе толчок
+    // и откат чередуются и шнур дрожит. Шнур провис — упора больше нет.
+    if (pane.blocked && pane.blocked.pin === pin) {
+      const relaxed = pane.blocked.ropes.every(rope => pane.stats.stretch[rope] < FREE_AT);
+      allowed = relaxed || pane.blocked.ropes.every(rope => badness(rope, pin, nextX, nextY) <= badness(rope, pin, x, y) + 1e-6);
+      if (allowed) pane.blocked = null;
+    }
+    pane.stats.blockedNow = !allowed;
+    if (allowed) {
+      saved = {x, y};
+      lab.pinX[pin] = nextX;
+      lab.pinY[pin] = nextY;
+    }
+
+    lab.grid.build(lab.pinX, lab.pinY, lab.pinCount);
+    pane.solver.step(STEP, lab);
+
+    const offending = [];
+    lab.wires.forEach((wire, rope) => {
+      const line = pane.solver.polyline(rope);
+      const path = polylineLength(line) / CELL;
+      const stretch = path / wire.length - 1;
+      pane.stats.stretch[rope] = stretch;
+      pane.paying[rope] = false;
+
+      for (const ghost of lab.ghostPins[rope]) {
+        if (distanceToPolyline(line, lab.pinX[ghost], lab.pinY[ghost]) > CLEARANCE * 1.1) lab.ghostPins[rope].delete(ghost);
+      }
+
+      if (reeling && !braked(pane, rope)) {
+        const chord = Math.hypot(lab.pinX[lab.tailPin[rope]] - lab.pinX[lab.startPin[rope]], lab.pinY[lab.tailPin[rope]] - lab.pinY[lab.startPin[rope]]) / CELL;
+        if (stretch < 0.01 && wire.length > chord + 0.1) pane.solver.setLength(lab, rope, Math.max(chord, wire.length - 0.08));
+      }
+
+      // Катушка: отдаёт ровно до своего порога, если он есть и есть что отдавать.
+      const payAt = model.payAt(pane, rope);
+      if (payAt !== null && stretch > payAt && wire.length < limit) {
+        const needed = Math.min(limit, path / (1 + payAt));
+        pane.stats.paid += needed - wire.length;
+        pane.solver.setLength(lab, rope, needed);
+        pane.paying[rope] = true;
+        return;
+      }
+      if (stretch <= BREAK_AT) return;
+
+      // Предел: срыв с зацепа, ближайшего к руке; без зацепов — упор.
+      const contacts = [];
+      for (let other = 0; other < lab.pinCount; other++) {
+        if (lab.pinWire[other] === rope || lab.ghostPins[rope].has(other)) continue;
+        const d = distanceToPolyline(line, lab.pinX[other], lab.pinY[other]);
+        if (d < CLEARANCE * 1.15) contacts.push({pin: other, at: distanceToPolyline.at});
+      }
+      if (!contacts.length) {
+        offending.push(rope);
+        return;
+      }
+      const rammer = contacts.find(contact => contact.pin === pin);
+      const release = rammer || contacts.sort((a, b) => b.at - a.at)[0];
+      lab.ghostPins[rope].add(release.pin);
+      pane.stats.slips++;
+    });
+
+    if (offending.length && saved) {
+      lab.pinX[pin] = saved.x;
+      lab.pinY[pin] = saved.y;
+      pane.blocked = {pin, ropes: offending};
+      pane.stats.blocks++;
+      pane.stats.blockedNow = true;
+    }
+    lab.wires.forEach((wire, rope) => wire.color = tensionColor(pane.stats.stretch[rope]));
+  };
+
+  const scale = () => canvas.clientWidth / (scene.size[0] * CELL);
+
+  pane.render = () => {
+    const lab = pane.lab;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const width = Math.round(canvas.clientWidth * dpr);
+    const height = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    const zoom = scale();
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.fillStyle = '#102cff';
+    context.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    context.strokeStyle = 'rgba(255,255,255,.22)';
+    context.lineWidth = 1;
+    context.beginPath();
+    for (let gx = 0; gx <= scene.size[0]; gx++) {
+      context.moveTo(Math.round(gx * CELL * zoom) + 0.5, 0);
+      context.lineTo(Math.round(gx * CELL * zoom) + 0.5, canvas.clientHeight);
+    }
+    for (let gy = 0; gy <= scene.size[1]; gy++) {
+      context.moveTo(0, Math.round(gy * CELL * zoom) + 0.5);
+      context.lineTo(canvas.clientWidth, Math.round(gy * CELL * zoom) + 0.5);
+    }
+    context.stroke();
+    context.save();
+    context.scale(zoom, zoom);
+    context.lineWidth = CELL;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    pane.solver.draw(context, lab);
+    const driven = pane.driven();
+    for (let pin = 0; pin < lab.pinCount; pin++) {
+      context.fillStyle = pin === driven ? (pane.stats.blockedNow ? HOT : ACCENT) : INK;
+      context.beginPath();
+      context.arc(lab.pinX[pin], lab.pinY[pin], CELL / 2, 0, Math.PI * 2);
+      context.fill();
+    }
+    // катушка: дуга — сколько размотано; сплошное белое кольцо — тормоз
+    context.lineCap = 'butt';
+    lab.wires.forEach((wire, rope) => {
+      const cx = lab.pinX[lab.startPin[rope]];
+      const cy = lab.pinY[lab.startPin[rope]];
+      const share = Math.min(1, wire.length / limit);
+      const holding = model.payAt(pane, rope) === null;
+      context.lineWidth = 6;
+      context.strokeStyle = holding ? INK : 'rgba(255,255,255,.28)';
+      context.beginPath();
+      context.arc(cx, cy, CELL * 0.78, 0, Math.PI * 2);
+      context.stroke();
+      context.strokeStyle = share >= 0.999 ? HOT : pane.paying[rope] ? '#ffffff' : ACCENT;
+      context.lineWidth = pane.paying[rope] ? 9 : 6;
+      context.beginPath();
+      context.arc(cx, cy, CELL * (holding ? 0.98 : 0.78), -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * share);
+      context.stroke();
+    });
+    context.restore();
+  };
+
+  pane.readout = () => {
+    const lab = pane.lab;
+    const worst = Math.max(...pane.stats.stretch) * 100;
+    const anyPaying = pane.paying.some(Boolean);
+    const anyHolding = lab.wires.some((wire, rope) => model.payAt(pane, rope) === null);
+    const full = lab.wires.some(wire => wire.length >= limit - 1e-6);
+    stateLine.textContent = 'катушка: ' + (full ? 'пуста' : anyPaying ? 'отдаёт' : anyHolding ? (model.tag === '4' ? 'застопорена' : 'на тормозе') : 'держит длину');
+    const rows = [
+      ['длины, кл.', lab.wires.map(wire => wire.length.toFixed(1)).join(' · ')],
+      ['натяжение макс.', `${Math.max(0, worst).toFixed(0)} %`, worst > 10],
+      ['размотано всего', `${pane.stats.paid.toFixed(1)} кл.`],
+      ['срывов / упоров', `${pane.stats.slips} / ${pane.stats.blocks}`, pane.stats.slips + pane.stats.blocks > 0]
+    ];
+    if (model.tag === '4') rows.push(['скорость руки', `${pane.handSpeed.toFixed(1)} кл/с`, pane.handSpeed > BELT_SPEED]);
+    readouts.innerHTML = rows.map(([label, value, hot]) => `<div class="row${hot ? ' hot' : ''}"><span>${label}</span><b>${value}</b></div>`).join('');
+  };
+
+  // Рука своя у каждого окна. Короткий тап по стартовой точке — замок на этот шнур.
+  const toWorld = event => {
+    const rect = canvas.getBoundingClientRect();
+    const zoom = scale();
+    return {x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom};
+  };
+  let press = null;
+  canvas.addEventListener('pointerdown', event => {
+    const lab = pane.lab;
+    const point = toWorld(event);
+    let best = -1;
+    let bestDistance = CELL * 1.2;
+    for (let pin = 0; pin < lab.pinCount; pin++) {
+      const d = Math.hypot(point.x - lab.pinX[pin], point.y - lab.pinY[pin]);
+      if (d < bestDistance) {
+        best = pin;
+        bestDistance = d;
+      }
+    }
+    if (best < 0) return;
+    press = {pin: best, x: event.clientX, y: event.clientY, at: performance.now(), previousHand: pane.hand};
+    pane.hand = {pin: best, x: lab.pinX[best], y: lab.pinY[best], active: true};
+    pane.lastTarget = null;
+    pane.blocked = null;
+    manualNote.textContent = 'ручное управление · «заново» вернёт сценарий';
+    canvas.classList.add('grabbing');
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (!pane.hand?.active) return;
+    const point = toWorld(event);
+    pane.hand.x = Math.max(0, Math.min(scene.size[0] * CELL, point.x));
+    pane.hand.y = Math.max(0, Math.min(scene.size[1] * CELL, point.y));
+  });
+  const release = event => {
+    if (pane.hand) pane.hand.active = false;
+    canvas.classList.remove('grabbing');
+    if (!press) return;
+    const rope = pane.lab.startPin.indexOf(press.pin);
+    const tap = Math.hypot(event.clientX - press.x, event.clientY - press.y) < 5 && performance.now() - press.at < 350;
+    if (tap && rope >= 0) {
+      pane.locked[rope] = !pane.locked[rope];
+      pane.hand = press.previousHand;
+      if (!pane.hand) manualNote.textContent = '';
+    }
+    press = null;
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  return pane;
+}
+
+// ---------------------------------------------------------------- сборка
+
+const panes = MODELS.map(model => createPane(document.getElementById('panes'), model));
+let clock = 0;
+let accumulator = 0;
+let slow = false;
+
+function chipRow(host, items, label, isActive, choose) {
+  for (const item of items) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.type = 'button';
+    chip.textContent = label(item);
+    chip.setAttribute('aria-pressed', String(isActive(item)));
+    chip.onclick = () => {
+      choose(item);
+      for (const sibling of host.children) sibling.setAttribute('aria-pressed', String(sibling === chip));
+      restart();
+    };
+    host.append(chip);
+  }
+}
+chipRow(document.getElementById('scenarios'), SCENES, item => item.label, item => item === scene, item => scene = item);
+chipRow(document.getElementById('limits'), LIMITS, item => String(item), item => item === limit, item => limit = item);
+
+function restart() {
+  clock = 0;
+  accumulator = 0;
+  reeling = false;
+  document.getElementById('reel').setAttribute('aria-pressed', 'false');
+  document.getElementById('scenarioNote').textContent = scene.note + ' Сценарий повторяется; схватите любую точку, чтобы вести её самому — только в этом окне.';
+  panes.forEach(pane => pane.load());
+}
+
+function toggle(id, get, set) {
+  const button = document.getElementById(id);
+  button.onclick = () => {
+    set(!get());
+    button.setAttribute('aria-pressed', String(get()));
+  };
+}
+toggle('slow', () => slow, value => slow = value);
+toggle('reel', () => reeling, value => reeling = value);
+toggle('brake', () => brakeButton, value => brakeButton = value);
+document.getElementById('restart').onclick = restart;
+window.addEventListener('keydown', event => {
+  if (event.code !== 'Space') return;
+  event.preventDefault();
+  spaceHeld = true;
+});
+window.addEventListener('keyup', event => { if (event.code === 'Space') spaceHeld = false; });
+
+function tickAll() {
+  clock += STEP;
+  if (clock > scene.duration) {
+    clock = 0;
+    panes.forEach(pane => { if (!pane.hand) pane.load(); });
+  }
+  const point = scene.drive.path(clock);
+  const target = {x: (point.x + 0.5) * CELL, y: (point.y + 0.5) * CELL};
+  panes.forEach(pane => pane.step(target));
+}
+
+restart();
+let previous = performance.now();
+let readoutAt = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  accumulator += Math.min(0.1, (now - previous) / 1000) * (slow ? 0.25 : 1);
+  previous = now;
+  let steps = 0;
+  while (accumulator >= STEP && steps < 4) {
+    accumulator -= STEP;
+    tickAll();
+    steps++;
+  }
+  if (!steps) return;
+  panes.forEach(pane => pane.render());
+  if (now - readoutAt > 250) {
+    readoutAt = now;
+    panes.forEach(pane => pane.readout());
+  }
+}
+requestAnimationFrame(loop);
+window.panes = panes;  // консоль браузера — часть инструментария демо
+window.tickAll = tickAll;
+window.restartLab = restart;
+</script>
+</body>
+</html>
