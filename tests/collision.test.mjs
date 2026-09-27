@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildPinSpatialIndex, collectSegmentCandidates, querySegmentPins, resolveWirePinCollisions} from '../src/collision.js';
+import {buildPinSpatialIndex, collectSegmentCandidates, pinClusters, prepareRopeContacts, querySegmentPins, resolveRopeContacts, resolveWirePinCollisions, settleRopeContacts} from '../src/collision.js';
 
 const cell = 44;
 const wires = [
@@ -235,4 +235,148 @@ test('a pin under the anchor still deflects a wire hanging onto it', () => {
   const contacts = resolveWirePinCollisions('R', points, false, index, cell * 1.06);
   assert.ok(contacts > 0);
   assert.ok(points[2].x > 30, `expected the hanging wire pushed aside, got x=${points[2].x}`);
+});
+
+// ─── Контакт с памятью стороны ─────────────────────────────────────────────────
+
+function rope(anchor, count, step, direction = [1, 0]) {
+  const points = [];
+  for (let i = 0; i < count; i++) {
+    const x = anchor[0] + direction[0] * step * i;
+    const y = anchor[1] + direction[1] * step * i;
+    points.push({x, y, ox: x, oy: y});
+  }
+  return {points, step};
+}
+
+// Тот же цикл, что в редакторе: интеграция, 10 проходов связей и контактов, два финальных прохода.
+function simulate(wire, wires, frames, onFrame) {
+  let index = buildPinSpatialIndex(wires, cell);
+  const p = wire.points;
+  let [ax, ay] = [p[0].x, p[0].y];
+  for (let frame = 0; frame < frames; frame++) {
+    const next = onFrame?.(frame);
+    if (next) {
+      index = buildPinSpatialIndex(next, cell, index.positions);
+      const own = next.find(item => item.id === 'R');
+      if (own) [ax, ay] = [center(own.x), center(own.y)];
+    }
+    for (let i = 1; i < p.length; i++) {
+      const q = p[i], vx = (q.x - q.ox) * 0.94, vy = (q.y - q.oy) * 0.94;
+      q.ox = q.x; q.oy = q.y; q.x += vx; q.y += vy + 0.22;
+    }
+    p[0].x = p[0].ox = ax; p[0].y = p[0].oy = ay;
+    prepareRopeContacts(wire, 'R', false, index, cell);
+    for (let n = 0; n < 10; n++) {
+      p[0].x = ax; p[0].y = ay;
+      for (let i = 0; i < p.length - 1; i++) {
+        const a = p[i], b = p[i + 1], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, diff = (d - wire.step) / d;
+        if (i === 0) { b.x -= dx * diff; b.y -= dy * diff; }
+        else { a.x += dx * diff / 2; a.y += dy * diff / 2; b.x -= dx * diff / 2; b.y -= dy * diff / 2; }
+      }
+      resolveRopeContacts(wire, false, cell, {maxMove: cell / 2});
+    }
+    for (let n = 0; n < 2; n++) resolveRopeContacts(wire, false, cell, {final: true, maxMove: cell / 2});
+    settleRopeContacts(wire);
+  }
+}
+
+function deepest(wire, pins) {
+  let depth = -Infinity;
+  const p = wire.points;
+  for (const pin of pins) {
+    for (let i = 1; i < p.length; i++) {
+      const a = p[i - 1], b = p[i], sx = b.x - a.x, sy = b.y - a.y, l = sx * sx + sy * sy || 1;
+      const t = Math.max(0, Math.min(1, ((pin.x - a.x) * sx + (pin.y - a.y) * sy) / l));
+      depth = Math.max(depth, cell - Math.hypot(a.x + sx * t - pin.x, a.y + sy * t - pin.y));
+    }
+  }
+  return depth;
+}
+
+const center = v => (v + 0.5) * cell;
+
+test('touching and diagonal pins form one obstacle, pins two cells apart do not', () => {
+  const index = buildPinSpatialIndex([
+    {id: 'a', x: 5, y: 5, length: 0}, {id: 'b', x: 6, y: 5, length: 0}, {id: 'c', x: 7, y: 6, length: 0},
+    {id: 'd', x: 10, y: 5, length: 0}, {id: 'e', x: 12, y: 5, length: 0}
+  ], cell);
+  const pins = [...new Map([...index.buckets.values()].flat().map(pin => [pin.order, pin])).values()];
+  const of = pinClusters(pins, cell);
+  const cluster = id => of.get(pins.find(pin => pin.key === `${id}:0`).order);
+  assert.equal(cluster('a'), cluster('b'));
+  assert.equal(cluster('b'), cluster('c'));
+  assert.notEqual(cluster('d'), cluster('e'));
+});
+
+test('a rope flung across a touching pin stays on its side', () => {
+  // жгут висит вплотную справа от пина; за один кадр низ жгута бросают влево на 100px
+  const wires = [{id: 'R', x: 3, y: 2, length: 8}, {id: 'P', x: 2, y: 6, length: 0}];
+  const wire = rope([center(3), center(2)], 12, 8 * cell / 11, [0, 1]);
+  simulate(wire, wires, 120);
+  for (const point of wire.points.slice(3)) point.ox = point.x + 100;
+  simulate(wire, wires, 1);
+  const pin = {x: center(2), y: center(6)};
+  const level = wire.points.filter(point => Math.abs(point.y - pin.y) < cell / 2);
+  assert.ok(level.length && level.every(point => point.x > pin.x), `rope got past the pin: ${level.map(point => point.x.toFixed(0))}`);
+  assert.ok(deepest(wire, [pin]) < 0.5);
+});
+
+test('a rope swung onto two touching pins rests on them without jitter or overlap', () => {
+  const pins = [{id: 'a', x: 10, y: 6, length: 0}, {id: 'b', x: 11, y: 6, length: 0}];
+  const wires = [{id: 'R', x: 6, y: 2, length: 9}, ...pins];
+  const wire = rope([center(6), center(2)], 13, 9 * cell / 12);
+  simulate(wire, wires, 400);
+  const before = wire.points.map(point => [point.x, point.y]);
+  simulate(wire, wires, 60);
+  const motion = Math.max(...wire.points.map((point, i) => Math.hypot(point.x - before[i][0], point.y - before[i][1])));
+  assert.ok(motion < 0.5, `rope still moves by ${motion.toFixed(2)}px`);
+  assert.ok(deepest(wire, pins.map(pin => ({x: center(pin.x), y: center(pin.y)}))) < 0.5);
+});
+
+test('a rope born lying through touching pins keeps its path and stays still', () => {
+  const pins = [{id: 'a', x: 10, y: 6, length: 0}, {id: 'b', x: 11, y: 6, length: 0}];
+  const wires = [{id: 'R', x: 10, y: 1, length: 10}, ...pins];
+  const wire = rope([center(10), center(1)], 14, 10 * cell / 13, [0, 1]);
+  simulate(wire, wires, 300);
+  const before = wire.points.map(point => [point.x, point.y]);
+  simulate(wire, wires, 60);
+  const motion = Math.max(...wire.points.map((point, i) => Math.hypot(point.x - before[i][0], point.y - before[i][1])));
+  assert.ok(motion < 0.5, `rope still moves by ${motion.toFixed(2)}px`);
+  assert.ok(wire.contact.ghost.size >= 1, 'pins the rope was born through are ignored');
+});
+
+test('a pin dropped onto a hanging rope pushes the rope fully aside', () => {
+  const wires = [{id: 'R', x: 8, y: 2, length: 8}];
+  const wire = rope([center(8), center(2)], 12, 8 * cell / 11, [0, 1]);
+  simulate(wire, wires, 120);
+  const dropped = [...wires, {id: 'D', x: 8, y: 6, length: 0}];
+  simulate(wire, dropped, 400, frame => (frame === 0 ? dropped : null));
+  assert.ok(deepest(wire, [{x: center(8), y: center(6)}]) < 0.5, 'rope left the dropped pin');
+});
+
+test('a start led by a shaky hand along a gap between pins drags the rope without jerks or cutting through', () => {
+  // проход между рядами точек ровно в толщину жгута: рука ходит на треть клетки, ручка то и дело заходит в точки
+  const pins = [2, 4, 6, 8].flatMap(x => [3, 5, 7].map(y => ({id: `p${x}${y}`, x, y, length: 0})));
+  const centers = pins.map(pin => ({x: center(pin.x), y: center(pin.y)}));
+  const wire = rope([center(1), center(4)], 12, 8 * cell / 11, [0, 1]);
+  const hand = frame => {
+    const t = Math.min(1, frame / 240);
+    return {x: 1 + 8 * t + (t < 1 ? 0.33 * Math.sin(frame * 0.09) : 0), y: 4 + (t < 1 ? 0.33 * Math.sin(frame * 0.07 + 2) : 0)};
+  };
+  let worstJerk = 0, worstCut = 0;
+  let before = wire.points.map(point => [point.x, point.y]);
+  simulate(wire, [{id: 'R', x: 1, y: 4, length: 8}, ...pins], 360, frame => {
+    if (frame) {
+      worstJerk = Math.max(worstJerk, ...wire.points.slice(1).map((point, i) => Math.hypot(point.x - before[i + 1][0], point.y - before[i + 1][1])));
+      const start = wire.points[0];
+      const handDepth = Math.max(0, ...centers.map(pin => cell - Math.hypot(start.x - pin.x, start.y - pin.y)));
+      worstCut = Math.max(worstCut, deepest(wire, centers) - handDepth);
+    }
+    before = wire.points.map(point => [point.x, point.y]);
+    return [{id: 'R', ...hand(frame), length: 8}, ...pins];
+  });
+  assert.ok(worstJerk < cell / 3, `rope jerked by ${worstJerk.toFixed(1)}px in a frame`);
+  assert.ok(worstCut < cell / 10, `rope went ${worstCut.toFixed(1)}px deeper into a pin than the hand did`);
+  assert.ok(deepest(wire, centers) < 0.5, 'rope rests clear of the pins');
 });

@@ -506,8 +506,10 @@ async function main() {
     try {
       await setViewport(390, 844, true);
       await reset();
-      await evaluate(`localStorage.setItem('wires-v2',JSON.stringify({version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:7,y:0,length:10,color:'#102cff'},{id:'0002',x:7,y:4,length:0,color:'#102cff'},{id:'0003',x:16,y:1,length:11,color:'#102cff'}]}));localStorage.setItem('wires-view-v2',JSON.stringify({x:0,y:0,zoom:1}));location.reload()`);
+      await evaluate(`localStorage.setItem('wires-v2',JSON.stringify({version:1,cell:44,background:'#f200e9',pointsMatchBackground:false,gridVisible:true,wires:[{id:'0001',x:7,y:0,length:10,color:'#102cff'},{id:'0002',x:8,y:4,length:0,color:'#102cff'},{id:'0003',x:16,y:1,length:11,color:'#102cff'}]}));localStorage.setItem('wires-view-v2',JSON.stringify({x:0,y:0,zoom:1}));location.reload()`);
       await sleep(700);
+      // пин въезжает в висящий жгут с соседней клетки: жгут должен уйти в сторону, а не остаться сквозь пин
+      await evaluate(`(()=>{const start=document.querySelector('.wire-group[data-id="0002"] .wire-start-hit');start.focus();start.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',code:'ArrowLeft',bubbles:true}))})()`);
       const collisionState = await evaluate("(async()=>{const button=document.querySelector('#collisionToggle'),before=button.textContent.trim(),backgroundBefore=getComputedStyle(button).backgroundColor;button.click();button.click();await new Promise(resolve=>setTimeout(resolve,50));return {before,after:button.textContent.trim(),pressed:button.getAttribute('aria-pressed'),backgroundBefore,backgroundAfter:getComputedStyle(button).backgroundColor}})()");
       assert(collisionState.pressed === 'true' && collisionState.before === 'коллизии' && collisionState.after === 'коллизии', `collision label changed with state: ${JSON.stringify(collisionState)}`);
       await sleep(220);

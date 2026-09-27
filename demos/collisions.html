@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>Коллизии — WIRES</title>
+<link rel="stylesheet" href="lab.css">
+<style>
+.legend i.point{background:#00e69c}
+.legend i.ghost{background:none;border:3px solid #ff5a4e;width:14px;height:14px}
+.state{font:11px var(--mono);min-height:1.3em}
+.readouts{font:11px var(--mono);line-height:1.6}
+.readouts b{color:var(--accent);font-weight:400}
+</style>
+</head>
+<body class="deck">
+<div class="deck-inner">
+  <a class="back" href="index.html">← лаборатория</a>
+  <p class="logo">Коллизии<small>ЖГУТ И ТОЧКИ ВПЛОТНУЮ · ТРИ РЕШАТЕЛЯ НА ОДНОЙ СЦЕНЕ</small></p>
+  <p class="intro">
+    Одна и та же сцена в трёх окнах: решатель, который был в редакторе до сегодняшнего дня, и два варианта нового.
+    Новый знает, с какой стороны от жгута каждая точка, и считает соседние точки одним препятствием.
+    Если конец жгута завели в точку, жгут рядом с ним заходит в неё ровно настолько же и выходит вместе с концом.
+    Варианты нового отличаются одним — что делать, когда жгут <b>появился сразу сквозь точки</b> (импорт, первая загрузка):
+    не трогать эти точки, пока жгут из них не выйдет («призраки»), или сразу вытолкнуть на ту сторону, где лежит бо́льшая часть жгута.
+    Сценарий играет сам; схватите любую точку или конец жгута — дальше это окно ваше.
+  </p>
+  <div class="legend">
+    <span><i class="point"></i>точка</span>
+    <span><i></i>конец жгута</span>
+    <span><i class="probe"></i>точка, которую ведут</span>
+    <span><i class="ghost"></i>жгут заметно наехал на точку</span>
+  </div>
+  <div class="bar">
+    <button class="toggle" type="button" id="slow" aria-pressed="false">замедлить ×4</button>
+    <button class="toggle" type="button" id="restart">заново</button>
+  </div>
+
+  <section class="question">
+    <div class="scenarios" id="scenarios"></div>
+    <p class="scenario-note" id="scenarioNote"></p>
+    <div class="panes" id="panes"></div>
+  </section>
+
+  <section class="question">
+    <h2><small>КАК ЧИТАТЬ</small>Что сравнивать</h2>
+    <p>
+      <b>Сквозь точки</b> — на сколько точек жгут сейчас заметно наехал (красные кольца): край жгута зашёл в точку глубже половины её радиуса. Такие точки решатель не держит.
+      <b>Дрожь</b> — насколько сдвигается самая беспокойная точка жгута за кадр; в покое должно быть «покой».
+      <b>Растяжение</b> — насколько жгут длиннее своей длины; здесь длина не растёт, чтобы видеть одни коллизии.
+      Точки, которые касаются друг друга по стороне или диагонали, жгут не проходит; через клетку — проходит впритык.
+    </p>
+  </section>
+
+  <p class="foot">
+    Предыдущий полигон — <a href="retract.html">сматывание</a>. Все демо — в <a href="index.html">лаборатории</a>.
+  </p>
+</div>
+
+<script type="module">
+import {CELL} from './lab.js';
+import {buildPinSpatialIndex, collectSegmentCandidates, prepareRopeContacts, resolveRopeContacts, resolveWirePinCollisions, settleRopeContacts, tetherRope} from '../src/collision.js';
+
+const INK = '#f8f5ed';
+const POINT = '#00e69c';
+const ACCENT = '#ffc642';
+const HOT = '#ff5a4e';
+const ROPE_COLORS = ['#f8f5ed', '#f200e9', '#ffc642', '#f8f5ed'];
+const STEP = 1 / 60;
+const GRAVITY = 0.22;          // px за кадр², как в редакторе
+const DAMPING = 0.94;          // сопротивление воздуха 6%
+const CLEARANCE = CELL;        // радиус точки + половина толщины жгута
+const OLD_CLEARANCE = CELL * 1.06;
+const FOLLOW = 0.72;
+
+// ---------------------------------------------------------------- сцены (клетки)
+
+const grid = (xs, ys) => xs.flatMap(x => ys.map(y => [x, y]));
+const path = (points, t) => {
+  let total = 0;
+  const lengths = [0];
+  for (let i = 1; i < points.length; i++) lengths.push(total += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+  const target = Math.max(0, Math.min(1, t)) * total;
+  let i = 1;
+  while (i < points.length - 1 && lengths[i] < target) i++;
+  const k = (target - lengths[i - 1]) / (lengths[i] - lengths[i - 1] || 1);
+  return [points[i - 1][0] + (points[i][0] - points[i - 1][0]) * k, points[i - 1][1] + (points[i][1] - points[i - 1][1]) * k];
+};
+
+const SCENES = [
+  {
+    label: 'падение на пару',
+    note: 'Жгут падает на две соседние точки. Между ними он не пролезает — для него это одно препятствие.',
+    size: [16, 12],
+    ropes: [{start: [3, 2], length: 9, dir: 90}],
+    points: [[8, 6], [9, 6]],
+    duration: 7
+  },
+  {
+    label: 'старт через сетку',
+    note: 'Старт жгута ведут змейкой прямо сквозь сетку точек через клетку. Конец проходит через точки, а жгут за ним должен их обходить и не оставаться внутри.',
+    size: [12, 16],
+    ropes: [{start: [1, 3], length: 10}],
+    points: grid([2, 4, 6, 8], [3, 5, 7, 9, 11, 13]),
+    drive: {rope: 0, end: 'start', from: 0.6, to: 7.5, path: [[1, 3], [9, 3], [9, 7], [1, 7], [5, 6]]},
+    duration: 12
+  },
+  {
+    label: 'ведём между точками',
+    note: 'Старт ведут по проходам между точками, как рукой: чуть неточно, с дрожью в треть клетки, и оставляют в проходе. Проход ровно в толщину жгута, поэтому любая неточность — это уже заход в точку.',
+    size: [12, 16],
+    ropes: [{start: [1, 4], length: 10}],
+    points: grid([2, 4, 6, 8], [3, 5, 7, 9, 11, 13]),
+    drive: {rope: 0, end: 'start', from: 0.6, to: 8, wobble: 0.33, path: [[1, 4], [7, 4], [7, 8], [3, 8], [3, 4], [5, 4]]},
+    duration: 12
+  },
+  {
+    label: 'протащили по колонке',
+    note: 'Старт ведут вниз прямо по колонке точек и возвращают наверх, между двумя точками, — сценарий со скриншота, где жгут оставался лежать поверх колонки.',
+    size: [10, 16],
+    ropes: [{start: [3, 1], length: 12}],
+    points: grid([2, 4, 6], [2, 4, 6, 8, 10, 12, 14]),
+    drive: {rope: 0, end: 'start', from: 0.6, to: 6, path: [[3, 1], [4, 3], [4, 11], [4, 3], [3, 2]]},
+    duration: 11
+  },
+  {
+    label: 'хвост сквозь сетку',
+    note: 'Хвост протаскивают змейкой сквозь сетку дальше, чем хватает длины, и отпускают. Жгут перетянут: здесь длина не растёт.',
+    size: [18, 12],
+    ropes: [{start: [1, 4], tail: [3, 4], length: 12}],
+    points: grid([5, 7, 9, 11], [2, 4, 6, 8]),
+    drive: {rope: 0, end: 'tail', from: 0.6, to: 6.5, path: [[3, 4], [6, 1], [8, 9], [10, 1], [12, 9], [15, 5]]},
+    duration: 11
+  },
+  {
+    label: 'точки на жгут',
+    note: 'Через секунду прямо на висящий жгут ставят две соседние точки — как двойным кликом по жгуту.',
+    size: [12, 12],
+    ropes: [{start: [5, 1], length: 9}],
+    points: [],
+    add: {at: 1.2, points: [[5, 5], [6, 5]]},
+    duration: 6
+  },
+  {
+    label: 'родился сквозь точки',
+    note: 'Так жгут появляется после импорта или в первый раз после обновления: форма строится наугад и ложится прямо сквозь точки.',
+    size: [12, 12],
+    ropes: [{start: [5, 1], length: 9}],
+    points: [[5, 5], [6, 5], [5, 6], [6, 6]],
+    duration: 6
+  },
+  {
+    label: 'длинные жгуты в сетке',
+    note: 'Четыре жгута по 48 клеток с концами внутри сетки, форма строится наугад — так выглядел рисунок после перезагрузки. Крайний случай.',
+    size: [16, 30],
+    ropes: [
+      {start: [6, 7], tail: [4, 5], length: 48},
+      {start: [7, 12], tail: [4, 15], length: 48},
+      {start: [6, 9], tail: [4, 2], length: 48},
+      {start: [5, 16], tail: [1, 10], length: 48}
+    ],
+    points: grid([3, 5, 7], [5, 7, 9, 11, 13, 15, 17, 19]).filter(([x, y]) => !(x === 5 && y === 16)),
+    duration: 12
+  }
+];
+
+// ---------------------------------------------------------------- решатели
+
+const MODELS = [
+  {tag: 'было', title: 'Каждая точка толкает сама', solver: 'old',
+    text: '<p>Решатель до сегодняшнего дня: каждая точка отталкивает отрезок жгута отдельно и понемногу. У соседних точек толчки навстречу друг другу.</p>'},
+  {tag: 'стало', title: 'Сторона и призраки', solver: 'lasting',
+    text: '<p>Точка всегда на своей стороне от жгута. Если жгут <b>появился</b> сразу сквозь точки, он не трогает их, пока не выйдет, — ничего не рвёт, но может остаться сквозь. Так сейчас в редакторе.</p>'},
+  {tag: 'стало', title: 'Сторона без призраков', solver: 'end',
+    text: '<p>То же, но жгут, появившийся сквозь точки, <b>сразу выталкивается</b> туда, где его бо́льшая часть. Точки видны всегда; цена — в тесноте жгут может перетянуться.</p>'}
+];
+
+// ---------------------------------------------------------------- физика окна
+
+function makeRope(spec) {
+  const count = Math.max(4, Math.min(64, Math.ceil(spec.length * 1.35)));
+  const step = spec.length * CELL / (count - 1);
+  const x = (spec.start[0] + 0.5) * CELL, y = (spec.start[1] + 0.5) * CELL;
+  const pinned = Boolean(spec.tail);
+  const ex = pinned ? (spec.tail[0] + 0.5) * CELL : x;
+  const ey = pinned ? (spec.tail[1] + 0.5) * CELL : y + spec.length * CELL;
+  const span = Math.hypot(ex - x, ey - y), slack = Math.max(0, spec.length * CELL - span);
+  const sag = pinned && slack > 0 ? Math.min(Math.max(Math.sqrt(3 * span * slack / 8), slack / 2), spec.length * CELL / 2) : 0;
+  const angle = (spec.dir || 0) * Math.PI / 180;
+  const points = [];
+  for (let i = 0; i < count; i++) {
+    const t = i / (count - 1);
+    const px = pinned ? x + (ex - x) * t : x + Math.sin(angle) * i * step;
+    const py = pinned ? y + (ey - y) * t + 4 * t * (1 - t) * sag : y + Math.cos(angle) * i * step;
+    points.push({x: px, y: py, ox: px, oy: py});
+  }
+  return {points, step, length: spec.length, pinned, ax: x, ay: y, ex, ey};
+}
+
+function plainTether(rope) {
+  const p = rope.points, last = p.length - 1;
+  const pull = (q, x, y, max) => {
+    const dx = q.x - x, dy = q.y - y, d = Math.hypot(dx, dy);
+    if (d > max && d > 0) { q.x = x + dx * max / d; q.y = y + dy * max / d; }
+  };
+  for (let i = 1; i <= last; i++) {
+    if (rope.pinned && i === last) continue;
+    pull(p[i], rope.ax, rope.ay, i * rope.step * 0.996);
+    if (rope.pinned) pull(p[i], rope.ex, rope.ey, (last - i) * rope.step * 0.996);
+  }
+}
+
+// Шаг физики — тот же цикл, что в tick() редактора.
+function stepRope(rope, id, index, solver) {
+  const p = rope.points, last = p.length - 1;
+  p[0].x = p[0].ox = rope.ax;
+  p[0].y = p[0].oy = rope.ay;
+  if (rope.pinned) { p[last].x = p[last].ox = rope.ex; p[last].y = p[last].oy = rope.ey; }
+  for (let i = 1; i < p.length; i++) {
+    if (rope.pinned && i === last) continue;
+    const q = p[i], vx = (q.x - q.ox) * DAMPING, vy = (q.y - q.oy) * DAMPING;
+    q.ox = q.x; q.oy = q.y; q.x += vx; q.y += vy + GRAVITY;
+  }
+  let candidates = null;
+  if (solver === 'old') candidates = collectSegmentCandidates(index, p, OLD_CLEARANCE + CELL, id);
+  else prepareRopeContacts(rope, id, rope.pinned, index, CLEARANCE, {ghosts: solver});
+  for (let n = 0; n < 10; n++) {
+    p[0].x = rope.ax; p[0].y = rope.ay;
+    if (rope.pinned) { p[last].x = rope.ex; p[last].y = rope.ey; }
+    for (let i = 0; i < last; i++) {
+      const a = p[i], b = p[i + 1], dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1, diff = (d - rope.step) / d;
+      const fixedA = i === 0, fixedB = rope.pinned && i + 1 === last;
+      if (fixedA && fixedB) continue;
+      if (fixedA) { b.x -= dx * diff; b.y -= dy * diff; }
+      else if (fixedB) { a.x += dx * diff; a.y += dy * diff; }
+      else { a.x += dx * diff / 2; a.y += dy * diff / 2; b.x -= dx * diff / 2; b.y -= dy * diff / 2; }
+    }
+    if (solver === 'old') {
+      plainTether(rope);
+      resolveWirePinCollisions(id, p, rope.pinned, index, OLD_CLEARANCE, {correction: 0.35, maxPush: CELL * 0.5, candidates, response: 'position', slop: CELL * 0.04});
+    } else {
+      tetherRope(rope, rope.pinned, rope.ax, rope.ay, rope.ex, rope.ey);
+      resolveRopeContacts(rope, rope.pinned, CLEARANCE, {maxMove: CELL * 0.5});
+    }
+  }
+  if (solver === 'old') {
+    for (let n = 0; n < 2; n++) resolveWirePinCollisions(id, p, rope.pinned, index, OLD_CLEARANCE, {correction: 0.65, maxPush: CELL * 0.35, candidates, slop: CELL * 0.04});
+  } else {
+    for (let n = 0; n < 2; n++) resolveRopeContacts(rope, rope.pinned, CLEARANCE, {final: true, maxMove: CELL * 0.5});
+    settleRopeContacts(rope, 0.3);
+  }
+  if (rope.pinned) { p[last].x = p[last].ox = rope.ex; p[last].y = p[last].oy = rope.ey; }
+}
+
+function distanceToRope(rope, x, y) {
+  const p = rope.points;
+  let best = Infinity;
+  for (let i = 1; i < p.length; i++) {
+    const a = p[i - 1], b = p[i], sx = b.x - a.x, sy = b.y - a.y, l = sx * sx + sy * sy || 1;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * sx + (y - a.y) * sy) / l));
+    best = Math.min(best, Math.hypot(a.x + sx * t - x, a.y + sy * t - y));
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------- окно
+
+let scene = SCENES[0];
+
+function createPane(host, model) {
+  const article = document.createElement('article');
+  article.className = 'pane';
+  article.innerHTML = `<canvas></canvas><div class="pane-text"><h3><small>${model.tag}</small>${model.title}</h3>${model.text}<div class="manual"></div><div class="readouts"></div></div>`;
+  host.append(article);
+  const canvas = article.querySelector('canvas');
+  const context = canvas.getContext('2d', {alpha: false});
+  const readouts = article.querySelector('.readouts');
+  const manualNote = article.querySelector('.manual');
+  const pane = {model};
+
+  pane.load = () => {
+    pane.ropes = scene.ropes.map(makeRope);
+    // точки и концы жгутов — «жгуты» модели, как их видит индекс редактора
+    pane.wires = [];
+    scene.ropes.forEach((spec, i) => {
+      const wire = {id: 'r' + i, x: spec.start[0], y: spec.start[1], length: spec.length};
+      if (spec.tail) { wire.endX = spec.tail[0]; wire.endY = spec.tail[1]; }
+      pane.wires.push(wire);
+    });
+    scene.points.forEach(([x, y], i) => pane.wires.push({id: 'p' + i, x, y, length: 0}));
+    pane.added = false;
+    pane.prev = null;
+    pane.hand = null;
+    pane.manual = false;
+    pane.motion = [];
+    manualNote.textContent = '';
+    canvas.style.aspectRatio = `${scene.size[0]} / ${scene.size[1]}`;
+  };
+
+  const endOf = (wire, end) => end === 'tail' ? [wire.endX, wire.endY] : [wire.x, wire.y];
+  const setEnd = (index, end, x, y) => {
+    const wire = pane.wires[index];
+    if (end === 'tail') { wire.endX = x; wire.endY = y; } else { wire.x = x; wire.y = y; }
+    const rope = pane.ropes[index];
+    if (!rope) return;
+    if (end === 'tail') { rope.ex = (x + 0.5) * CELL; rope.ey = (y + 0.5) * CELL; }
+    else { rope.ax = (x + 0.5) * CELL; rope.ay = (y + 0.5) * CELL; }
+  };
+
+  pane.step = clock => {
+    if (scene.add && !pane.added && clock >= scene.add.at) {
+      pane.added = true;
+      scene.add.points.forEach(([x, y], i) => pane.wires.push({id: 'a' + i, x, y, length: 0}));
+    }
+    // рука ведёт конец жгута к цели, как в редакторе: за шаг проходит 72% оставшегося
+    let target = null;
+    if (pane.hand) target = pane.hand;
+    else if (!pane.manual && scene.drive && clock >= scene.drive.from && clock <= scene.drive.to + 1) {
+      const [x, y] = path(scene.drive.path, (clock - scene.drive.from) / (scene.drive.to - scene.drive.from));
+      const wobble = clock <= scene.drive.to ? scene.drive.wobble || 0 : 0;
+      target = {index: scene.drive.rope, end: scene.drive.end,
+        x: x + wobble * (0.6 * Math.sin(clock * 5.3) + 0.4 * Math.sin(clock * 11.7 + 1)),
+        y: y + wobble * (0.6 * Math.sin(clock * 4.1 + 2) + 0.4 * Math.sin(clock * 9.2))};
+    }
+    if (target) {
+      const wire = pane.wires[target.index];
+      const [cx, cy] = endOf(wire, target.end);
+      setEnd(target.index, target.end, cx + (target.x - cx) * FOLLOW, cy + (target.y - cy) * FOLLOW);
+    }
+    pane.driven = target;
+    const index = buildPinSpatialIndex(pane.wires, CELL, pane.prev);
+    pane.prev = index.positions;
+    const before = pane.ropes.map(rope => rope.points.map(q => [q.x, q.y]));
+    pane.ropes.forEach((rope, i) => stepRope(rope, 'r' + i, index, model.solver));
+    let worst = 0;
+    pane.ropes.forEach((rope, r) => rope.points.forEach((q, i) => {
+      if (i === 0 || (rope.pinned && i === rope.points.length - 1)) return;
+      worst = Math.max(worst, Math.hypot(q.x - before[r][i][0], q.y - before[r][i][1]));
+    }));
+    pane.motion.push(worst);
+    if (pane.motion.length > 30) pane.motion.shift();
+  };
+
+  // точки, на которые жгут заметно наехал: край жгута зашёл в точку глубже половины её радиуса
+  const ghosted = () => {
+    const out = new Set();
+    pane.wires.forEach((wire, w) => {
+      const x = (wire.x + 0.5) * CELL, y = (wire.y + 0.5) * CELL;
+      pane.ropes.forEach((rope, r) => {
+        if (r === w) return;
+        if (distanceToRope(rope, x, y) < CLEARANCE * 0.75) out.add(w * 2);
+        if (wire.endX !== undefined) {
+          const tx = (wire.endX + 0.5) * CELL, ty = (wire.endY + 0.5) * CELL;
+          if (distanceToRope(rope, tx, ty) < CLEARANCE * 0.75) out.add(w * 2 + 1);
+        }
+      });
+    });
+    return out;
+  };
+
+  const scale = () => canvas.clientWidth / (scene.size[0] * CELL);
+
+  pane.render = () => {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const width = Math.round(canvas.clientWidth * dpr), height = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    const zoom = scale();
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.fillStyle = '#102cff';
+    context.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    context.strokeStyle = 'rgba(255,255,255,.18)';
+    context.lineWidth = 1;
+    context.beginPath();
+    for (let gx = 0; gx <= scene.size[0]; gx++) { context.moveTo(Math.round(gx * CELL * zoom) + 0.5, 0); context.lineTo(Math.round(gx * CELL * zoom) + 0.5, canvas.clientHeight); }
+    for (let gy = 0; gy <= scene.size[1]; gy++) { context.moveTo(0, Math.round(gy * CELL * zoom) + 0.5); context.lineTo(canvas.clientWidth, Math.round(gy * CELL * zoom) + 0.5); }
+    context.stroke();
+    context.save();
+    context.scale(zoom, zoom);
+    context.lineWidth = CELL;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    pane.ropes.forEach((rope, r) => {
+      const p = rope.points;
+      context.strokeStyle = ROPE_COLORS[r % ROPE_COLORS.length];
+      context.beginPath();
+      context.moveTo(p[0].x, p[0].y);
+      for (let i = 1; i < p.length - 1; i++) context.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2);
+      context.lineTo(p[p.length - 1].x, p[p.length - 1].y);
+      context.stroke();
+    });
+    const inside = ghosted();
+    pane.wires.forEach((wire, w) => {
+      const ends = [[wire.x, wire.y, w * 2, 'start']];
+      if (wire.endX !== undefined) ends.push([wire.endX, wire.endY, w * 2 + 1, 'tail']);
+      for (const [x, y, key, end] of ends) {
+        const cx = (x + 0.5) * CELL, cy = (y + 0.5) * CELL;
+        const driven = pane.driven && pane.driven.index === w && pane.driven.end === end;
+        context.fillStyle = driven ? ACCENT : wire.length === 0 ? POINT : INK;
+        context.beginPath();
+        context.arc(cx, cy, CELL / 2, 0, Math.PI * 2);
+        context.fill();
+        if (inside.has(key)) {
+          context.strokeStyle = HOT;
+          context.lineWidth = 6;
+          context.beginPath();
+          context.arc(cx, cy, CELL / 2 + 5, 0, Math.PI * 2);
+          context.stroke();
+        }
+      }
+    });
+    context.restore();
+    pane.inside = inside.size;
+  };
+
+  pane.readout = () => {
+    const jitter = Math.max(...pane.motion, 0);
+    const stretch = Math.max(0, ...pane.ropes.map(rope => {
+      let length = 0;
+      for (let i = 1; i < rope.points.length; i++) length += Math.hypot(rope.points[i].x - rope.points[i - 1].x, rope.points[i].y - rope.points[i - 1].y);
+      return length / (rope.length * CELL) - 1;
+    }));
+    const calm = jitter < 0.1 ? 'покой' : `<b>${jitter.toFixed(1)} px</b>/кадр`;
+    readouts.innerHTML = `сквозь точки: ${pane.inside ? `<b>${pane.inside}</b>` : '0'}<br>дрожь: ${calm}<br>растяжение: ${stretch > 0.05 ? `<b>${Math.round(stretch * 100)}%</b>` : 'нет'}`;
+  };
+
+  const toCells = event => {
+    const rect = canvas.getBoundingClientRect(), zoom = scale();
+    return {x: (event.clientX - rect.left) / zoom / CELL - 0.5, y: (event.clientY - rect.top) / zoom / CELL - 0.5};
+  };
+  canvas.addEventListener('pointerdown', event => {
+    const point = toCells(event);
+    let best = null, bestDistance = 0.8;
+    pane.wires.forEach((wire, index) => {
+      const ends = [['start', wire.x, wire.y]];
+      if (wire.endX !== undefined) ends.push(['tail', wire.endX, wire.endY]);
+      for (const [end, x, y] of ends) {
+        const d = Math.hypot(point.x - x, point.y - y);
+        if (d < bestDistance) { bestDistance = d; best = {index, end}; }
+      }
+    });
+    if (!best) return;
+    canvas.setPointerCapture(event.pointerId);
+    canvas.classList.add('grabbing');
+    pane.manual = true;
+    pane.hand = {...best, ...point};
+    manualNote.textContent = 'вручную — сценарий в этом окне остановлен';
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (!pane.hand) return;
+    const point = toCells(event);
+    pane.hand.x = Math.max(-0.5, Math.min(scene.size[0] - 0.5, point.x));
+    pane.hand.y = Math.max(-0.5, Math.min(scene.size[1] - 0.5, point.y));
+  });
+  const release = () => { canvas.classList.remove('grabbing'); pane.hand = null; };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  return pane;
+}
+
+// ---------------------------------------------------------------- сборка
+
+const panes = MODELS.map(model => createPane(document.getElementById('panes'), model));
+let clock = 0;
+let accumulator = 0;
+let slow = false;
+
+const chips = document.getElementById('scenarios');
+for (const item of SCENES) {
+  const chip = document.createElement('button');
+  chip.className = 'chip';
+  chip.type = 'button';
+  chip.textContent = item.label;
+  chip.setAttribute('aria-pressed', String(item === scene));
+  chip.onclick = () => {
+    scene = item;
+    for (const sibling of chips.children) sibling.setAttribute('aria-pressed', String(sibling === chip));
+    restart();
+  };
+  chips.append(chip);
+}
+
+function restart() {
+  clock = 0;
+  accumulator = 0;
+  document.getElementById('scenarioNote').textContent = scene.note + ' Сценарий повторяется; схватите точку, чтобы попробовать самому — только в этом окне.';
+  panes.forEach(pane => pane.load());
+}
+
+const slowButton = document.getElementById('slow');
+slowButton.onclick = () => {
+  slow = !slow;
+  slowButton.setAttribute('aria-pressed', String(slow));
+};
+document.getElementById('restart').onclick = restart;
+
+function tickAll() {
+  clock += STEP;
+  if (clock > scene.duration) {
+    clock = 0;
+    panes.forEach(pane => { if (!pane.manual) pane.load(); });
+  }
+  panes.forEach(pane => pane.step(clock));
+}
+
+restart();
+let previous = performance.now();
+let readoutAt = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  accumulator += Math.min(0.1, (now - previous) / 1000) * (slow ? 0.25 : 1);
+  previous = now;
+  let steps = 0;
+  while (accumulator >= STEP && steps < 4) {
+    accumulator -= STEP;
+    tickAll();
+    steps++;
+  }
+  if (!steps) return;
+  panes.forEach(pane => pane.render());
+  if (now - readoutAt > 250) {
+    readoutAt = now;
+    panes.forEach(pane => pane.readout());
+  }
+}
+requestAnimationFrame(loop);
+window.panes = panes;  // консоль браузера — часть инструментария демо
+window.tickAll = tickAll;
+window.restartLab = restart;
+window.selectScene = i => chips.children[i].click();
+</script>
+</body>
+</html>
