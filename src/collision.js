@@ -177,6 +177,10 @@ export function resolveWirePinCollisions(wireId, points, pinned, index, clearanc
 // не понять, с какой он стороны.
 const DEEP = 0.5;
 
+// Прямая от конца к точке жгута, которая проходит мимо пина ближе 0.9 зазора, режет пин:
+// жгут огибает его. Прислонённый пин прямую не режет — жгут у него остаётся прямым.
+const SIGHT = 0.9;
+
 // Пины рядом с жгутом, без его собственных: иначе его же старт склеивал бы соседей в одно препятствие.
 export function pinClusters(pins, clearance) {
   const parent = new Map(pins.map(pin => [pin.order, pin.order]));
@@ -228,9 +232,14 @@ export function prepareRopeContacts(rope, wireId, pinned, index, clearance, opti
   const clusterOf = pinClusters([...near.values()], clearance);
   const next = Array.from({length: Math.max(0, segments)}, () => []);
   state.contacts = next;
-  state.firstTouch = Infinity;
-  state.lastTouch = -Infinity;
+  state.seeStart = Infinity;
+  state.seeEnd = -Infinity;
   if (segments <= 0) return;
+  // если пины растянули жгут целиком, он растянут равномерно — натяжение от концов меряет
+  // длину с этой растяжкой, иначе вся она собирается в одном отрезке у пина
+  let path = 0;
+  for (let i = 1; i <= segments; i++) path += Math.hypot(points[i].ox - points[i - 1].ox, points[i].oy - points[i - 1].oy);
+  state.stretch = Math.max(1, path / (rope.step * segments));
   const touching = new Set();
   const fresh = new Map();
   const lean = new Map();
@@ -268,10 +277,6 @@ export function prepareRopeContacts(rope, wireId, pinned, index, clearance, opti
       // форма нового жгута — только догадка: пины, в которые она попала, он не трогает, пока из них не выйдет
       if (lasting && state.age < 2 && distance < clearance * DEEP) ghost.add(cluster);
       if (ghost.has(cluster)) continue;
-      if (distance < clearance * 1.1) {
-        state.firstTouch = Math.min(state.firstTouch, segment);
-        state.lastTouch = Math.max(state.lastTouch, segment);
-      }
       lean.set(cluster, (lean.get(cluster) || 0) + across);
       const contact = {pin, side: 0};
       if (reach < clearance) contact.clearance = reach;
@@ -295,18 +300,39 @@ export function prepareRopeContacts(rope, wireId, pinned, index, clearance, opti
   state.ghost = new Set();
   for (const list of candidates) for (const pin of list) if (ghost.has(clusterOf.get(pin.order))) state.ghost.add(pin.key);
   if (ghost.size) for (const list of next) for (let i = list.length - 1; i >= 0; i--) if (ghost.has(clusterOf.get(list[i].pin.order))) list.splice(i, 1);
+  // натяжение от конца меряет прямой: она верна, пока от конца до точки жгута видно — прямая не режет пин
+  const obstacles = new Map();
+  for (const list of next) for (const {pin} of list) obstacles.set(pin.order, pin);
+  if (obstacles.size) {
+    const blocked = (from, to) => {
+      const segX = to.x - from.x;
+      const segY = to.y - from.y;
+      const lengthSquared = segX * segX + segY * segY || 1;
+      for (const pin of obstacles.values()) {
+        const t = Math.max(0, Math.min(1, ((pin.x - from.x) * segX + (pin.y - from.y) * segY) / lengthSquared));
+        const reach = room.get(pin.key) ?? clearance;
+        if (Math.hypot(from.x + segX * t - pin.x, from.y + segY * t - pin.y) < reach * SIGHT) return true;
+      }
+      return false;
+    };
+    for (let i = 1; i <= segments && state.seeStart === Infinity; i++) if (blocked(points[0], points[i])) state.seeStart = i - 1;
+    if (pinned) for (let i = segments - 1; i >= 1 && state.seeEnd === -Infinity; i--) if (blocked(points[segments], points[i])) state.seeEnd = i + 1;
+  }
   state.age++;
 }
 
 // Натяжение от концов: точка не дальше от закреплённого конца, чем шнур между
-// ними. Прямая мерка верна только до первого пина, которого жгут касается:
-// за пином путь вдоль жгута длиннее прямой, и натяжение тянуло бы его сквозь пины.
+// ними (с растяжкой, если пины растянули жгут целиком). Прямая мерка верна, пока
+// прямая от конца до точки не режет пин: за пином,
+// который жгут огибает, путь вдоль жгута длиннее прямой, и натяжение тянуло бы жгут
+// сквозь пины. Пин, к которому жгут просто прислонился, мерку не портит.
 export function tetherRope(rope, pinned, startX, startY, endX, endY, slack = 0.996) {
   const points = rope.points;
   const last = points.length - 1;
   const state = rope.contact;
-  const fromStart = state ? state.firstTouch : Infinity;
-  const fromEnd = state ? state.lastTouch + 1 : -Infinity;
+  const fromStart = state ? state.seeStart : Infinity;
+  const fromEnd = state ? state.seeEnd : -Infinity;
+  const reach = rope.step * slack * (state?.stretch || 1);
   const pull = (point, x, y, max) => {
     const dx = point.x - x;
     const dy = point.y - y;
@@ -318,8 +344,8 @@ export function tetherRope(rope, pinned, startX, startY, endX, endY, slack = 0.9
   };
   for (let i = 1; i <= last; i++) {
     if (pinned && i === last) continue;
-    if (i <= fromStart) pull(points[i], startX, startY, i * rope.step * slack);
-    if (pinned && i >= fromEnd) pull(points[i], endX, endY, (last - i) * rope.step * slack);
+    if (i <= fromStart) pull(points[i], startX, startY, i * reach);
+    if (pinned && i >= fromEnd) pull(points[i], endX, endY, (last - i) * reach);
   }
 }
 

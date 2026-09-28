@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildPinSpatialIndex, collectSegmentCandidates, pinClusters, prepareRopeContacts, querySegmentPins, resolveRopeContacts, resolveWirePinCollisions, settleRopeContacts} from '../src/collision.js';
+import {buildPinSpatialIndex, collectSegmentCandidates, pinClusters, prepareRopeContacts, querySegmentPins, resolveRopeContacts, resolveWirePinCollisions, settleRopeContacts, tetherRope} from '../src/collision.js';
 
 const cell = 44;
 const wires = [
@@ -249,11 +249,13 @@ function rope(anchor, count, step, direction = [1, 0]) {
   return {points, step};
 }
 
-// Тот же цикл, что в редакторе: интеграция, 10 проходов связей и контактов, два финальных прохода.
+// Тот же цикл, что в редакторе: интеграция, 10 проходов связей, натяжения и контактов, два финальных прохода.
+// wire.tail — закреплённый хвост в px.
 function simulate(wire, wires, frames, onFrame) {
   let index = buildPinSpatialIndex(wires, cell);
-  const p = wire.points;
+  const p = wire.points, last = p.length - 1, pinned = Boolean(wire.tail);
   let [ax, ay] = [p[0].x, p[0].y];
+  const [ex, ey] = wire.tail || [0, 0];
   for (let frame = 0; frame < frames; frame++) {
     const next = onFrame?.(frame);
     if (next) {
@@ -261,22 +263,26 @@ function simulate(wire, wires, frames, onFrame) {
       const own = next.find(item => item.id === 'R');
       if (own) [ax, ay] = [center(own.x), center(own.y)];
     }
-    for (let i = 1; i < p.length; i++) {
+    for (let i = 1; i < (pinned ? last : p.length); i++) {
       const q = p[i], vx = (q.x - q.ox) * 0.94, vy = (q.y - q.oy) * 0.94;
       q.ox = q.x; q.oy = q.y; q.x += vx; q.y += vy + 0.22;
     }
     p[0].x = p[0].ox = ax; p[0].y = p[0].oy = ay;
-    prepareRopeContacts(wire, 'R', false, index, cell);
+    if (pinned) { p[last].x = p[last].ox = ex; p[last].y = p[last].oy = ey; }
+    prepareRopeContacts(wire, 'R', pinned, index, cell);
     for (let n = 0; n < 10; n++) {
       p[0].x = ax; p[0].y = ay;
-      for (let i = 0; i < p.length - 1; i++) {
+      if (pinned) { p[last].x = ex; p[last].y = ey; }
+      for (let i = 0; i < last; i++) {
         const a = p[i], b = p[i + 1], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, diff = (d - wire.step) / d;
         if (i === 0) { b.x -= dx * diff; b.y -= dy * diff; }
+        else if (pinned && i + 1 === last) { a.x += dx * diff; a.y += dy * diff; }
         else { a.x += dx * diff / 2; a.y += dy * diff / 2; b.x -= dx * diff / 2; b.y -= dy * diff / 2; }
       }
-      resolveRopeContacts(wire, false, cell, {maxMove: cell / 2});
+      tetherRope(wire, pinned, ax, ay, ex, ey);
+      resolveRopeContacts(wire, pinned, cell, {maxMove: cell / 2});
     }
-    for (let n = 0; n < 2; n++) resolveRopeContacts(wire, false, cell, {final: true, maxMove: cell / 2});
+    for (let n = 0; n < 2; n++) resolveRopeContacts(wire, pinned, cell, {final: true, maxMove: cell / 2});
     settleRopeContacts(wire);
   }
 }
@@ -379,4 +385,35 @@ test('a start led by a shaky hand along a gap between pins drags the rope withou
   assert.ok(worstJerk < cell / 3, `rope jerked by ${worstJerk.toFixed(1)}px in a frame`);
   assert.ok(worstCut < cell / 10, `rope went ${worstCut.toFixed(1)}px deeper into a pin than the hand did`);
   assert.ok(deepest(wire, centers) < 0.5, 'rope rests clear of the pins');
+});
+
+test('a taut wire stays straight when a pin touches it at the start, the middle or the tail', () => {
+  // сматанный до прямой жгут: точка, прислонённая к нему снизу, не даёт провиса
+  for (const [x, y] of [[3, 6], [9, 6], [15, 6]]) {
+    const wire = rope([center(3), center(5)], 17, 12 * cell / 16);
+    wire.tail = [center(15), center(5)];
+    simulate(wire, [{id: 'R', x: 3, y: 5, length: 12, endX: 15, endY: 5}, {id: 'P', x, y, length: 0}], 300);
+    const sag = Math.max(...wire.points.map(point => point.y - center(5)));
+    assert.ok(sag < 2, `wire sags by ${sag.toFixed(1)}px with a pin at ${x},${y}`);
+  }
+});
+
+test('a wire pushed over a pin stretches evenly and lies straight on both sides', () => {
+  // жгут длиной ровно в пролёт, точку подняли под ним: пути через точку не хватает длины
+  const count = 14, step = 10 * cell / 13, peak = [center(7), center(7)];
+  const points = Array.from({length: count}, (_, i) => {
+    const t = i / (count - 1), from = t < 0.5 ? [center(2), center(9)] : peak, to = t < 0.5 ? peak : [center(12), center(9)], k = t < 0.5 ? t * 2 : t * 2 - 1;
+    const x = from[0] + (to[0] - from[0]) * k, y = from[1] + (to[1] - from[1]) * k;
+    return {x, y, ox: x, oy: y};
+  });
+  const wire = {points, step, tail: [center(12), center(9)]};
+  simulate(wire, [{id: 'R', x: 2, y: 9, length: 10, endX: 12, endY: 9}, {id: 'P', x: 7, y: 8, length: 0}], 600);
+  // отрезок у закреплённого конца проход связей выставляет точно в длину, его не считаем
+  const stretch = points.slice(1, -1).map((point, i) => Math.hypot(point.x - points[i].x, point.y - points[i].y) / step - 1);
+  assert.ok(Math.max(...stretch) - Math.min(...stretch) < 0.06, `stretch is uneven: ${stretch.map(v => (v * 100).toFixed(0)).join(' ')}%`);
+  const bend = (from, to) => Math.max(...points.slice(from + 1, to).map(point => {
+    const a = points[from], b = points[to], sx = b.x - a.x, sy = b.y - a.y;
+    return Math.abs(sx * (point.y - a.y) - sy * (point.x - a.x)) / Math.hypot(sx, sy);
+  }));
+  assert.ok(bend(0, 5) < 2 && bend(8, 13) < 2, `sides bend by ${bend(0, 5).toFixed(1)} and ${bend(8, 13).toFixed(1)}px`);
 });
