@@ -8,17 +8,22 @@ import {
   hasTail
 } from './model.js';
 
-export function serializeWires(state) {
+const MAX_SHAPE_POINTS = 64;
+
+// shapes — узлы жгутов в клетках, {id: [x0, y0, x1, y1, …]}; без них файл остаётся «wires 1»
+export function serializeWires(state, shapes = {}) {
+  const shaped = state.wires.some(wire => shapes[wire.id]?.length);
   const lines = [
-    'wires 1',
+    shaped ? 'wires 2' : 'wires 1',
     `canvas ${state.cell} ${state.background}`,
     `points ${state.pointMode}`,
     `grid ${state.gridVisible ? 'visible' : 'hidden'}`,
     ''
   ];
-  state.wires.forEach(wire => lines.push(
-    `wire ${wire.id} x ${wire.x} y ${wire.y} length ${wire.length} color ${wire.color}${hasTail(wire) ? ` end ${wire.endX} ${wire.endY}` : ''}`
-  ));
+  state.wires.forEach(wire => {
+    lines.push(`wire ${wire.id} x ${wire.x} y ${wire.y} length ${wire.length} color ${wire.color}${hasTail(wire) ? ` end ${wire.endX} ${wire.endY}` : ''}`);
+    if (shapes[wire.id]?.length) lines.push(`shape ${shapes[wire.id].join(' ')}`);
+  });
   return `${lines.join('\n')}\n`;
 }
 
@@ -30,13 +35,16 @@ export function parseWires(text) {
   const lines = rows
     .map((raw, index) => ({text: raw.trim(), number: index + 1}))
     .filter(row => row.text && !row.text.startsWith('#'));
-  if (lines[0]?.text !== 'wires 1') throw Error('Первая строка должна быть «wires 1»');
+  if (lines[0]?.text !== 'wires 1' && lines[0]?.text !== 'wires 2') throw Error('Первая строка должна быть «wires 1» или «wires 2»');
 
   const output = {version: 1, cell: 44, background: '#f200e9', pointMode: 'white', gridVisible: true, wires: []};
   const ids = new Set();
+  const shapes = {};
+  let previous = null;
 
   for (const row of lines.slice(1)) {
-    const parts = row.text.split(/\s+/);
+    const parts = row.text.split(/\s+/), after = previous;
+    previous = parts[0];
     const fail = message => { throw Error(`Строка ${row.number}: ${message}`); };
 
     if (parts[0] === 'canvas') {
@@ -88,8 +96,18 @@ export function parseWires(text) {
       continue;
     }
 
+    if (parts[0] === 'shape') {
+      const wire = output.wires[output.wires.length - 1];
+      if (after !== 'wire') fail('shape должна идти сразу после своей строки wire');
+      const values = parts.slice(1).map(Number);
+      if (values.length < 4 || values.length % 2 || values.length > MAX_SHAPE_POINTS * 2) fail(`shape — от 2 до ${MAX_SHAPE_POINTS} пар координат`);
+      if (values.some(value => !Number.isFinite(value) || Math.abs(value) > MAX_COORD + MAX_LENGTH)) fail('координаты shape должны быть числами');
+      shapes[wire.id] = values;
+      continue;
+    }
+
     fail(`неизвестная команда ${parts[0]}`);
   }
 
-  return output;
+  return Object.keys(shapes).length ? {...output, shapes} : output;
 }

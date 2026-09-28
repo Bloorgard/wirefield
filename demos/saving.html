@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#102cff">
+<title>Сохранение — WIRES</title>
+<link rel="stylesheet" href="lab.css">
+<style>
+.legend i.point{background:#00e69c}
+.legend i.flip{background:none;border:3px solid #ff5a4e;width:14px;height:14px}
+.readouts{font:11px var(--mono);line-height:1.6}
+.readouts b{color:var(--accent);font-weight:400}
+.readouts b.bad{color:#ff5a4e}
+.file summary{cursor:pointer;font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.85}
+.file pre{margin:8px 0 0;max-height:170px;overflow:auto;font:10px/1.5 var(--mono);white-space:pre;opacity:.9;scrollbar-width:thin;scrollbar-color:var(--ink) transparent}
+.bar .toggle.primary{background:var(--ink);color:var(--bg)}
+</style>
+</head>
+<body class="deck">
+<div class="deck-inner">
+  <a class="back" href="index.html">← лаборатория</a>
+  <p class="logo">Сохранение<small>КАК ЗАПИСАТЬ В .WIRES ФОРМУ ЗАПУТАННОГО РИСУНКА</small></p>
+  <p class="intro">
+    Сейчас <code>.wires</code> хранит только старт, конец, длину и цвет жгута, а форму физика строит заново — и запутанный рисунок распадается.
+    В первом окне два жгута сами заплетаются в сетку точек (концы можно таскать руками). Когда сцена успокоится, рисунок сохраняется
+    пятью способами и каждый файл открывается в своём окне с той же физикой, что в редакторе. Сравнивайте, осталась ли запутанность и сколько весит файл.
+  </p>
+  <div class="legend">
+    <span><i class="point"></i>точка</span>
+    <span><i></i>конец жгута</span>
+    <span><i class="probe"></i>конец, который ведут</span>
+    <span><i class="flip"></i>жгут обходит точку не с той стороны, что в оригинале</span>
+  </div>
+  <div class="bar">
+    <button class="toggle primary" type="button" id="save">сохранить и открыть</button>
+    <button class="toggle" type="button" id="restart">заново</button>
+    <button class="toggle" type="button" id="slow" aria-pressed="false">замедлить ×4</button>
+  </div>
+
+  <section class="question">
+    <p class="scenario-note" id="note"></p>
+    <div class="panes" id="panes"></div>
+  </section>
+
+  <section class="question">
+    <h2><small>КАК ЧИТАТЬ</small>Что сравнивать</h2>
+    <p>
+      <b>Обмотки</b> — с какой стороны жгут обходит каждую точку рядом с собой. Если сторона хоть у одной точки другая — рисунок распутался, красное кольцо.
+      <b>Отклонение</b> — насколько дальше всего узел жгута ушёл от своего места в оригинале, в клетках.
+      <b>Файл</b> — вес этого рисунка и прикидка для 1000 жгутов по 48 клеток (64 узла). Лимит файла в редакторе — 1 МБ.
+      Координаты пишутся в клетках с двумя знаками: сотая клетки — меньше половины пикселя.
+    </p>
+  </section>
+
+  <p class="foot">
+    Предыдущий полигон — <a href="collisions.html">коллизии</a>. Все демо — в <a href="index.html">лаборатории</a>.
+  </p>
+</div>
+
+<script type="module">
+import {CELL} from './lab.js';
+import {buildPinSpatialIndex, prepareRopeContacts, resolveRopeContacts, settleRopeContacts, tetherRope} from '../src/collision.js';
+import {parseWires, serializeWires} from '../src/wires-format.js';
+
+const INK = '#f8f5ed';
+const POINT = '#00e69c';
+const ACCENT = '#ffc642';
+const HOT = '#ff5a4e';
+const ROPE_COLORS = ['#ffc642', '#f200e9'];
+const STEP = 1 / 60;
+const GRAVITY = 0.22;
+const DAMPING = 0.94;
+const CLEARANCE = CELL;
+const FOLLOW = 0.72;
+const NEAR = CLEARANCE * 1.25;   // точка «у жгута» — для обмоток
+const SIZE = [15, 15];
+
+const grid = (xs, ys) => xs.flatMap(x => ys.map(y => [x, y]));
+const path = (points, t) => {
+  let total = 0;
+  const lengths = [0];
+  for (let i = 1; i < points.length; i++) lengths.push(total += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+  const target = Math.max(0, Math.min(1, t)) * total;
+  let i = 1;
+  while (i < points.length - 1 && lengths[i] < target) i++;
+  const k = (target - lengths[i - 1]) / (lengths[i] - lengths[i - 1] || 1);
+  return [points[i - 1][0] + (points[i][0] - points[i - 1][0]) * k, points[i - 1][1] + (points[i][1] - points[i - 1][1]) * k];
+};
+
+// жгуты заплетаются по проходам между точками: старт ведут змейкой, хвост закреплён
+const SCENE = {
+  ropes: [
+    {id: 'r0', start: [1, 1], tail: [13, 13], length: 48, color: ROPE_COLORS[0]},
+    {id: 'r1', start: [13, 1], tail: [1, 13], length: 44, color: ROPE_COLORS[1]}
+  ],
+  points: grid([3, 5, 7, 9, 11], [3, 5, 7, 9, 11]),
+  drives: [
+    {rope: 0, from: 0.5, to: 6, path: [[1, 1], [1, 4], [12, 4], [12, 8], [2, 8], [2, 10], [8, 10], [8, 2], [6, 2]]},
+    {rope: 1, from: 6.5, to: 11.5, path: [[13, 1], [13, 6], [4, 6], [4, 12], [10, 12], [10, 2], [12, 2]]}
+  ],
+  saveAt: 13.5
+};
+
+// ---------------------------------------------------------------- физика (как tick() редактора)
+
+const countOf = length => Math.max(4, Math.min(64, Math.ceil(length * 1.35)));
+
+function makeRope(wire) {
+  const count = countOf(wire.length);
+  const step = wire.length * CELL / (count - 1);
+  const x = (wire.x + 0.5) * CELL, y = (wire.y + 0.5) * CELL;
+  const pinned = Number.isFinite(wire.endX);
+  const ex = pinned ? (wire.endX + 0.5) * CELL : x, ey = pinned ? (wire.endY + 0.5) * CELL : y + wire.length * CELL;
+  const span = Math.hypot(ex - x, ey - y), slack = Math.max(0, wire.length * CELL - span);
+  const sag = pinned && slack > 0 ? Math.min(Math.max(Math.sqrt(3 * span * slack / 8), slack / 2), wire.length * CELL / 2) : 0;
+  const points = [];
+  for (let i = 0; i < count; i++) {
+    const t = i / (count - 1);
+    const px = pinned ? x + (ex - x) * t : x, py = pinned ? y + (ey - y) * t + 4 * t * (1 - t) * sag : y + i * step;
+    points.push({x: px, y: py, ox: px, oy: py});
+  }
+  return {id: wire.id, points, step, length: wire.length, pinned, ax: x, ay: y, ex, ey};
+}
+
+function stepRope(rope, index) {
+  const p = rope.points, last = p.length - 1;
+  p[0].x = p[0].ox = rope.ax; p[0].y = p[0].oy = rope.ay;
+  if (rope.pinned) { p[last].x = p[last].ox = rope.ex; p[last].y = p[last].oy = rope.ey; }
+  for (let i = 1; i < p.length; i++) {
+    if (rope.pinned && i === last) continue;
+    const q = p[i], vx = (q.x - q.ox) * DAMPING, vy = (q.y - q.oy) * DAMPING;
+    q.ox = q.x; q.oy = q.y; q.x += vx; q.y += vy + GRAVITY;
+  }
+  prepareRopeContacts(rope, rope.id, rope.pinned, index, CLEARANCE, {ghosts: 'lasting'});
+  for (let n = 0; n < 10; n++) {
+    p[0].x = rope.ax; p[0].y = rope.ay;
+    if (rope.pinned) { p[last].x = rope.ex; p[last].y = rope.ey; }
+    for (let i = 0; i < last; i++) {
+      const a = p[i], b = p[i + 1], dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1, diff = (d - rope.step) / d;
+      const fixedA = i === 0, fixedB = rope.pinned && i + 1 === last;
+      if (fixedA && fixedB) continue;
+      if (fixedA) { b.x -= dx * diff; b.y -= dy * diff; }
+      else if (fixedB) { a.x += dx * diff; a.y += dy * diff; }
+      else { a.x += dx * diff / 2; a.y += dy * diff / 2; b.x -= dx * diff / 2; b.y -= dy * diff / 2; }
+    }
+    tetherRope(rope, rope.pinned, rope.ax, rope.ay, rope.ex, rope.ey);
+    resolveRopeContacts(rope, rope.pinned, CLEARANCE, {maxMove: CELL * 0.5});
+  }
+  for (let n = 0; n < 2; n++) resolveRopeContacts(rope, rope.pinned, CLEARANCE, {final: true, maxMove: CELL * 0.5});
+  settleRopeContacts(rope, 0.3);
+  if (rope.pinned) { p[last].x = p[last].ox = rope.ex; p[last].y = p[last].oy = rope.ey; }
+}
+
+// ---------------------------------------------------------------- обмотки: с какой стороны жгута каждая точка рядом
+
+function nearest(points, x, y) {
+  let best = {d: Infinity, s: 0, t: 0, side: 0};
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i], sx = b.x - a.x, sy = b.y - a.y, l = sx * sx + sy * sy || 1;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * sx + (y - a.y) * sy) / l));
+    const d = Math.hypot(a.x + sx * t - x, a.y + sy * t - y);
+    if (d < best.d) best = {d, s: i - 1, t, side: Math.sign(sx * (y - a.y) - sy * (x - a.x)) || 1};
+  }
+  return best;
+}
+
+// точки рядом с жгутом в порядке вдоль жгута, со стороной: + слева по ходу от старта, − справа
+function wrapsOf(rope, pins) {
+  const out = [];
+  for (const pin of pins) {
+    const x = (pin.x + 0.5) * CELL, y = (pin.y + 0.5) * CELL, hit = nearest(rope.points, x, y);
+    if (hit.d < NEAR) out.push({id: pin.id, side: hit.side, at: hit.s + hit.t});
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+// ---------------------------------------------------------------- форматы
+
+const cells = v => v / CELL - 0.5;
+const num = v => { const s = String(+v.toFixed(2)); return s === '-0' ? '0' : s; };
+const kb = bytes => bytes < 1024 ? `${bytes} Б` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} КБ` : `${(bytes / 1024 / 1024).toFixed(2)} МБ`;
+
+function baseFile(snapshot) {
+  return serializeWires({cell: CELL, background: '#102cff', pointMode: 'white', gridVisible: true, wires: snapshot.wires});
+}
+
+// дописывает строку после строки своего жгута
+function withLines(text, lines, header) {
+  return text.split('\n').flatMap(line => {
+    if (line === 'wires 1') return [header];
+    const id = line.startsWith('wire ') ? line.split(' ')[1] : null;
+    return id && lines[id] ? [line, lines[id]] : [line];
+  }).join('\n');
+}
+
+// снимает строки формы и отдаёт остальное стандартному парсеру
+function readFile(text, key) {
+  const extra = {};
+  let last = null;
+  const rest = text.split('\n').filter(line => {
+    if (line.startsWith('wire ')) last = line.split(' ')[1];
+    if (line.startsWith(key + ' ')) { extra[last] = line.slice(key.length + 1); return false; }
+    return true;
+  }).map(line => line === 'wires 2' ? 'wires 1' : line).join('\n');
+  return {model: parseWires(rest), extra};
+}
+
+const FORMATS = [
+  {
+    key: 'none', tag: 'сейчас', title: 'Без формы',
+    text: '<p>Как <code>.wires</code> сейчас: старт, конец, длина. Форму физика строит заново — провисом между концами.</p>',
+    write: snapshot => baseFile(snapshot),
+    read: text => ({model: parseWires(text), shapes: {}})
+  },
+  {
+    key: 'shape', tag: '1', title: 'Координаты узлов',
+    text: '<p>Строка <code>shape</code> под жгутом: все узлы в клетках. Читается и правится руками, но самый тяжёлый.</p>',
+    write: snapshot => withLines(baseFile(snapshot), Object.fromEntries(snapshot.ropes.map(rope => [rope.id, 'shape ' + rope.points.map(q => `${num(cells(q.x))} ${num(cells(q.y))}`).join(' ')])), 'wires 2'),
+    read: text => {
+      const {model, extra} = readFile(text, 'shape');
+      const shapes = {};
+      for (const [id, line] of Object.entries(extra)) {
+        const v = line.split(' ').map(Number), pts = [];
+        for (let i = 0; i + 1 < v.length; i += 2) pts.push([v[i], v[i + 1]]);
+        shapes[id] = pts;
+      }
+      return {model, shapes};
+    }
+  },
+  {
+    key: 'delta', tag: '1б', title: 'Сдвиги узлов',
+    text: '<p>То же, но каждый узел — сдвиг от предыдущего, а первый — это старт. На большом холсте координаты — это «124.37», а сдвиг — «0.74», файл легче на треть. Здесь холст маленький, поэтому разницы почти нет.</p>',
+    write: snapshot => withLines(baseFile(snapshot), Object.fromEntries(snapshot.ropes.map(rope => {
+      let px = Math.round(cells(rope.points[0].x) * 100), py = Math.round(cells(rope.points[0].y) * 100);
+      const parts = rope.points.slice(1).map(q => {
+        const x = Math.round(cells(q.x) * 100), y = Math.round(cells(q.y) * 100), out = `${num((x - px) / 100)} ${num((y - py) / 100)}`;
+        px = x; py = y;
+        return out;
+      });
+      return [rope.id, 'shape ' + parts.join(' ')];
+    })), 'wires 2'),
+    read: text => {
+      const {model, extra} = readFile(text, 'shape');
+      const shapes = {};
+      for (const [id, line] of Object.entries(extra)) {
+        const wire = model.wires.find(w => w.id === id), v = line.split(' ').map(Number);
+        let x = Math.round(wire.x * 100), y = Math.round(wire.y * 100);
+        const pts = [[x / 100, y / 100]];
+        for (let i = 0; i + 1 < v.length; i += 2) { x += Math.round(v[i] * 100); y += Math.round(v[i + 1] * 100); pts.push([x / 100, y / 100]); }
+        shapes[id] = pts;
+      }
+      return {model, shapes};
+    }
+  },
+  {
+    key: 'packed', tag: '2', title: 'Сжатая строка',
+    text: '<p>Те же сдвиги, упакованные в байты и base64. Легче всех из точных, но строку не прочесть и не поправить.</p>',
+    write: snapshot => withLines(baseFile(snapshot), Object.fromEntries(snapshot.ropes.map(rope => {
+      const bytes = new Int16Array((rope.points.length - 1) * 2);
+      let px = Math.round(cells(rope.points[0].x) * 100), py = Math.round(cells(rope.points[0].y) * 100);
+      rope.points.slice(1).forEach((q, i) => {
+        const x = Math.round(cells(q.x) * 100), y = Math.round(cells(q.y) * 100);
+        bytes[i * 2] = x - px; bytes[i * 2 + 1] = y - py; px = x; py = y;
+      });
+      return [rope.id, 'shape ' + btoa(String.fromCharCode(...new Uint8Array(bytes.buffer)))];
+    })), 'wires 2'),
+    read: text => {
+      const {model, extra} = readFile(text, 'shape');
+      const shapes = {};
+      for (const [id, line] of Object.entries(extra)) {
+        const wire = model.wires.find(w => w.id === id), raw = atob(line), bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        const v = new Int16Array(bytes.buffer);
+        let x = Math.round(wire.x * 100), y = Math.round(wire.y * 100);
+        const pts = [[x / 100, y / 100]];
+        for (let i = 0; i + 1 < v.length; i += 2) { x += v[i]; y += v[i + 1]; pts.push([x / 100, y / 100]); }
+        shapes[id] = pts;
+      }
+      return {model, shapes};
+    }
+  },
+  {
+    key: 'wraps', tag: '3', title: 'Только обмотки',
+    text: '<p>Строка <code>wraps</code>: мимо каких точек и с какой стороны идёт жгут. Форму при загрузке собирает по этим точкам физика — похоже, но не точь-в-точь.</p>',
+    write: snapshot => withLines(baseFile(snapshot), Object.fromEntries(snapshot.ropes.map(rope => [rope.id, 'wraps ' + wrapsOf(rope, snapshot.pins).map(w => w.id + (w.side > 0 ? '+' : '-')).join(' ')])), 'wires 2'),
+    read: text => {
+      const {model, extra} = readFile(text, 'wraps');
+      const shapes = {};
+      for (const [id, line] of Object.entries(extra)) shapes[id] = routeByWraps(model, id, line.split(' ').filter(Boolean));
+      return {model, shapes};
+    }
+  }
+];
+
+// Форма по обмоткам: ломаная от старта через обходы точек к хвосту, узлы раскладываются по ней поровну.
+function routeByWraps(model, id, wraps) {
+  const wire = model.wires.find(w => w.id === id), byId = new Map(model.wires.map(w => [w.id, w]));
+  const centers = wraps.map(token => {
+    const pin = byId.get(token.slice(0, -1));
+    return {x: pin.x, y: pin.y, side: token.endsWith('+') ? 1 : -1};
+  });
+  const tail = Number.isFinite(wire.endX) ? {x: wire.endX, y: wire.endY} : null;
+  const chain = [{x: wire.x, y: wire.y}, ...centers, ...(tail ? [tail] : [])];
+  const way = [{x: wire.x, y: wire.y}];
+  centers.forEach((c, i) => {
+    const prev = chain[i], next = chain[i + 2] || {x: c.x, y: c.y + 1};
+    let dx = next.x - prev.x, dy = next.y - prev.y;
+    const d = Math.hypot(dx, dy) || 1;
+    dx /= d; dy /= d;
+    // точка слева по ходу (+) — жгут идёт справа от неё, и наоборот
+    way.push({x: c.x + c.side * dy * 1.02, y: c.y - c.side * dx * 1.02});
+  });
+  if (tail) way.push(tail);
+  else { const end = way[way.length - 1]; way.push({x: end.x, y: end.y + wire.length}); }
+  const lengths = [0];
+  for (let i = 1; i < way.length; i++) lengths.push(lengths[i - 1] + Math.hypot(way[i].x - way[i - 1].x, way[i].y - way[i - 1].y));
+  const total = lengths[lengths.length - 1], count = countOf(wire.length), pts = [];
+  for (let k = 0; k < count; k++) {
+    const target = total * k / (count - 1);
+    let i = 1;
+    while (i < way.length - 1 && lengths[i] < target) i++;
+    const t = (target - lengths[i - 1]) / (lengths[i] - lengths[i - 1] || 1);
+    pts.push([way[i - 1].x + (way[i].x - way[i - 1].x) * t, way[i - 1].y + (way[i].y - way[i - 1].y) * t]);
+  }
+  return pts;
+}
+
+// ---------------------------------------------------------------- окна
+
+function drawPane(pane, flips) {
+  const {canvas, context} = pane;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const width = Math.round(canvas.clientWidth * dpr), height = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+  const zoom = canvas.clientWidth / (SIZE[0] * CELL);
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.fillStyle = '#102cff';
+  context.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  context.strokeStyle = 'rgba(255,255,255,.18)';
+  context.lineWidth = 1;
+  context.beginPath();
+  for (let gx = 0; gx <= SIZE[0]; gx++) { context.moveTo(Math.round(gx * CELL * zoom) + 0.5, 0); context.lineTo(Math.round(gx * CELL * zoom) + 0.5, canvas.clientHeight); }
+  for (let gy = 0; gy <= SIZE[1]; gy++) { context.moveTo(0, Math.round(gy * CELL * zoom) + 0.5); context.lineTo(canvas.clientWidth, Math.round(gy * CELL * zoom) + 0.5); }
+  context.stroke();
+  if (!pane.ropes) return;
+  context.save();
+  context.scale(zoom, zoom);
+  context.lineWidth = CELL;
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  pane.ropes.forEach(rope => {
+    const p = rope.points;
+    context.strokeStyle = pane.wires.find(w => w.id === rope.id).color;
+    context.beginPath();
+    context.moveTo(p[0].x, p[0].y);
+    for (let i = 1; i < p.length - 1; i++) context.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2);
+    context.lineTo(p[p.length - 1].x, p[p.length - 1].y);
+    context.stroke();
+  });
+  pane.wires.forEach((wire, w) => {
+    const ends = [[wire.x, wire.y, 'start']];
+    if (Number.isFinite(wire.endX)) ends.push([wire.endX, wire.endY, 'tail']);
+    for (const [x, y, end] of ends) {
+      const cx = (x + 0.5) * CELL, cy = (y + 0.5) * CELL;
+      const driven = pane.driven && pane.driven.index === w && pane.driven.end === end;
+      context.fillStyle = driven ? ACCENT : wire.length === 0 ? POINT : INK;
+      context.beginPath();
+      context.arc(cx, cy, CELL / 2, 0, Math.PI * 2);
+      context.fill();
+      if (wire.length === 0 && flips?.has(wire.id)) {
+        context.strokeStyle = HOT;
+        context.lineWidth = 6;
+        context.beginPath();
+        context.arc(cx, cy, CELL / 2 + 5, 0, Math.PI * 2);
+        context.stroke();
+      }
+    }
+  });
+  context.restore();
+}
+
+function stepPane(pane) {
+  const index = buildPinSpatialIndex(pane.wires, CELL, pane.prev);
+  pane.prev = index.positions;
+  pane.ropes.forEach(rope => stepRope(rope, index));
+}
+
+function createPane(host, head, text) {
+  const article = document.createElement('article');
+  article.className = 'pane';
+  article.innerHTML = `<canvas style="aspect-ratio:${SIZE[0]} / ${SIZE[1]}"></canvas><div class="pane-text"><h3>${head}</h3>${text}<div class="manual"></div><div class="readouts"></div><details class="file"><summary>файл</summary><pre></pre></details></div>`;
+  host.append(article);
+  const canvas = article.querySelector('canvas');
+  return {article, canvas, context: canvas.getContext('2d', {alpha: false}), readouts: article.querySelector('.readouts'), manual: article.querySelector('.manual'), pre: article.querySelector('pre'), summary: article.querySelector('summary')};
+}
+
+const host = document.getElementById('panes');
+const original = createPane(host, '<small>оригинал</small>Рисунок', '<p>Жгуты заплетаются сами. Схватите конец жгута или точку — дальше окно ваше; отпущенный конец встаёт в клетку, как в редакторе.</p>');
+original.article.querySelector('.file').remove();
+const restored = FORMATS.map(format => ({format, ...createPane(host, `<small>${format.tag}</small>${format.title}`, format.text)}));
+
+let clock = 0, accumulator = 0, slow = false, saved = null;
+
+function loadOriginal() {
+  original.wires = [
+    ...SCENE.ropes.map(r => ({id: r.id, x: r.start[0], y: r.start[1], length: r.length, color: r.color, endX: r.tail[0], endY: r.tail[1]})),
+    ...SCENE.points.map(([x, y], i) => ({id: 'p' + String(i + 1).padStart(2, '0'), x, y, length: 0, color: POINT}))
+  ];
+  original.ropes = original.wires.filter(w => w.length > 0).map(makeRope);
+  original.prev = null;
+  original.hand = null;
+  original.manual.textContent = '';
+}
+
+const endOf = (wire, end) => end === 'tail' ? [wire.endX, wire.endY] : [wire.x, wire.y];
+function setEnd(index, end, x, y) {
+  const wire = original.wires[index];
+  if (end === 'tail') { wire.endX = x; wire.endY = y; } else { wire.x = x; wire.y = y; }
+  const rope = original.ropes.find(r => r.id === wire.id);
+  if (!rope) return;
+  if (end === 'tail') { rope.ex = (x + 0.5) * CELL; rope.ey = (y + 0.5) * CELL; } else { rope.ax = (x + 0.5) * CELL; rope.ay = (y + 0.5) * CELL; }
+}
+
+function stepOriginal() {
+  let target = null;
+  if (original.hand) target = original.hand;
+  else if (!original.manualMode) {
+    for (const drive of SCENE.drives) {
+      if (clock < drive.from || clock > drive.to + 0.6) continue;
+      const [x, y] = path(drive.path, (clock - drive.from) / (drive.to - drive.from));
+      target = {index: drive.rope, end: 'start', x, y};
+    }
+  }
+  if (target) {
+    const [cx, cy] = endOf(original.wires[target.index], target.end);
+    setEnd(target.index, target.end, cx + (target.x - cx) * FOLLOW, cy + (target.y - cy) * FOLLOW);
+  } else if (original.driven) {
+    // отпущенный конец встаёт в клетку
+    const [cx, cy] = endOf(original.wires[original.driven.index], original.driven.end);
+    setEnd(original.driven.index, original.driven.end, Math.round(cx), Math.round(cy));
+  }
+  original.driven = target;
+  stepPane(original);
+}
+
+// снимок: концы в клетках, как их запишет редактор
+function snapshot() {
+  const wires = original.wires.map(w => ({...w, x: Math.round(w.x), y: Math.round(w.y), ...(Number.isFinite(w.endX) ? {endX: Math.round(w.endX), endY: Math.round(w.endY)} : {})}));
+  const ropes = original.ropes.map(r => ({id: r.id, points: r.points.map(q => ({x: q.x, y: q.y}))}));
+  return {wires, ropes, pins: wires.filter(w => w.length === 0)};
+}
+
+function saveAndOpen() {
+  const snap = snapshot();
+  saved = {snap, wraps: Object.fromEntries(snap.ropes.map(r => [r.id, wrapsOf(r, snap.pins)]))};
+  for (const pane of restored) {
+    const text = pane.format.write(snap);
+    const {model, shapes} = pane.format.read(text);
+    pane.wires = model.wires.map(w => ({...w}));
+    pane.ropes = pane.wires.filter(w => w.length > 0).map(wire => {
+      const rope = makeRope(wire), shape = shapes[wire.id];
+      if (shape && shape.length === rope.points.length) rope.points = shape.map(([x, y]) => { const px = (x + 0.5) * CELL, py = (y + 0.5) * CELL; return {x: px, y: py, ox: px, oy: py}; });
+      return rope;
+    });
+    pane.prev = null;
+    const bytes = new TextEncoder().encode(text).length;
+    const base = new TextEncoder().encode(baseFile(snap)).length;
+    const pointsTotal = snap.ropes.reduce((sum, r) => sum + r.points.length, 0);
+    const wireLine = 64;  // строка wire с концом ~ 60 символов
+    const estimate = pane.format.key === 'wraps' ? 1000 * (wireLine + (bytes - base) / snap.ropes.length) : 1000 * (wireLine + (bytes - base) / pointsTotal * 64);
+    pane.size = {bytes, estimate};
+    pane.summary.textContent = `файл · ${kb(bytes)}`;
+    pane.pre.textContent = text.split('\n').map(line => line.length > 110 ? line.slice(0, 110) + ' …' : line).join('\n');
+  }
+  document.getElementById('note').textContent = 'Сохранено. Нижние окна открыли свои файлы и дальше живут по физике — можно сохранить ещё раз в любой момент.';
+}
+
+function compare(pane) {
+  const flips = new Set();
+  let deviation = 0;
+  for (const rope of pane.ropes) {
+    const source = saved.snap.ropes.find(r => r.id === rope.id);
+    rope.points.forEach((q, i) => { if (source.points[i]) deviation = Math.max(deviation, Math.hypot(q.x - source.points[i].x, q.y - source.points[i].y)); });
+    for (const wrap of saved.wraps[rope.id]) {
+      const pin = pane.wires.find(w => w.id === wrap.id), hit = nearest(rope.points, (pin.x + 0.5) * CELL, (pin.y + 0.5) * CELL);
+      if (hit.side !== wrap.side || hit.d > CLEARANCE * 2.5) flips.add(wrap.id);
+    }
+  }
+  return {flips, deviation: deviation / CELL, total: Object.values(saved.wraps).reduce((sum, list) => sum + list.length, 0)};
+}
+
+function readout(pane, result) {
+  const {bytes, estimate} = pane.size;
+  const flips = result.flips.size;
+  const over = estimate > 1024 * 1024;
+  pane.readouts.innerHTML =
+    `обмотки: ${flips ? `<b class="bad">${flips} из ${result.total} не с той стороны</b>` : `все ${result.total} на месте`}<br>` +
+    `отклонение: ${result.deviation < 0.05 ? 'нет' : `<b>${result.deviation.toFixed(1)} кл.</b>`}<br>` +
+    `файл: ${kb(bytes)}<br>` +
+    `1000 жгутов: ${over ? `<b class="bad">~${kb(estimate)}, больше лимита</b>` : `~${kb(estimate)}`}`;
+}
+
+function restart() {
+  clock = 0; accumulator = 0; saved = null;
+  original.manualMode = false;
+  loadOriginal();
+  restored.forEach(pane => { pane.ropes = null; pane.readouts.textContent = 'ждёт сохранения'; pane.summary.textContent = 'файл'; pane.pre.textContent = ''; });
+  document.getElementById('note').textContent = 'Жгуты заплетаются… Когда сцена успокоится, рисунок сохранится сам.';
+}
+
+function tick() {
+  clock += STEP;
+  stepOriginal();
+  if (!saved && !original.manualMode && clock >= SCENE.saveAt) saveAndOpen();
+  if (saved) restored.forEach(stepPane);
+}
+
+// руками: конец жгута или точку
+const toCells = event => {
+  const rect = original.canvas.getBoundingClientRect(), zoom = original.canvas.clientWidth / (SIZE[0] * CELL);
+  return {x: (event.clientX - rect.left) / zoom / CELL - 0.5, y: (event.clientY - rect.top) / zoom / CELL - 0.5};
+};
+original.canvas.addEventListener('pointerdown', event => {
+  const point = toCells(event);
+  let best = null, bestDistance = 0.8;
+  original.wires.forEach((wire, index) => {
+    const ends = [['start', wire.x, wire.y]];
+    if (Number.isFinite(wire.endX)) ends.push(['tail', wire.endX, wire.endY]);
+    for (const [end, x, y] of ends) {
+      const d = Math.hypot(point.x - x, point.y - y);
+      if (d < bestDistance) { bestDistance = d; best = {index, end}; }
+    }
+  });
+  if (!best) return;
+  original.canvas.setPointerCapture(event.pointerId);
+  original.canvas.classList.add('grabbing');
+  original.manualMode = true;
+  original.hand = {...best, ...point};
+  original.manual.textContent = 'вручную — сценарий остановлен, сохраняйте кнопкой';
+});
+original.canvas.addEventListener('pointermove', event => {
+  if (!original.hand) return;
+  const point = toCells(event);
+  original.hand.x = Math.max(0, Math.min(SIZE[0] - 1, point.x));
+  original.hand.y = Math.max(0, Math.min(SIZE[1] - 1, point.y));
+});
+const release = () => { original.canvas.classList.remove('grabbing'); original.hand = null; };
+original.canvas.addEventListener('pointerup', release);
+original.canvas.addEventListener('pointercancel', release);
+
+document.getElementById('save').onclick = saveAndOpen;
+document.getElementById('restart').onclick = restart;
+const slowButton = document.getElementById('slow');
+slowButton.onclick = () => { slow = !slow; slowButton.setAttribute('aria-pressed', String(slow)); };
+
+restart();
+let previous = performance.now(), readoutAt = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  accumulator += Math.min(0.1, (now - previous) / 1000) * (slow ? 0.25 : 1);
+  previous = now;
+  let steps = 0;
+  while (accumulator >= STEP && steps < 4) { accumulator -= STEP; tick(); steps++; }
+  if (!steps) return;
+  drawPane(original);
+  const results = saved ? restored.map(compare) : [];
+  restored.forEach((pane, i) => drawPane(pane, results[i]?.flips));
+  if (saved && now - readoutAt > 250) { readoutAt = now; restored.forEach((pane, i) => readout(pane, results[i])); }
+}
+requestAnimationFrame(loop);
+window.lab = {original, restored, tick, saveAndOpen, restart, compare, get clock() { return clock; }};  // консоль — часть инструментария демо
+</script>
+</body>
+</html>
