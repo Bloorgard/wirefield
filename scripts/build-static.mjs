@@ -1,4 +1,5 @@
-import {access, copyFile, mkdir, readdir, rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {access, copyFile, mkdir, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -19,6 +20,16 @@ for (const asset of assets) {
   await mkdir(dirname(target), {recursive: true});
   await copyFile(source, target);
 }
+
+// Модули подключаются с хэшем содержимого, чтобы браузер после деплоя не смешал новый index.html со старыми модулями из кэша.
+let page = await readFile(join(output, 'index.html'), 'utf8');
+for (const asset of assets.filter(path => path.startsWith('src/'))) {
+  const hash = createHash('sha256').update(await readFile(join(output, asset))).digest('hex').slice(0, 10);
+  const reference = `'./${asset}'`;
+  if (!page.includes(reference)) throw new Error(`index.html does not import ${asset}`);
+  page = page.replaceAll(reference, `'./${asset}?v=${hash}'`);
+}
+await writeFile(join(output, 'index.html'), page);
 
 const rootFiles = await readdir(output);
 const sourceFiles = await readdir(join(output, 'src'));

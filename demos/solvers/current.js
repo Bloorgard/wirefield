@@ -1,7 +1,7 @@
 // Солвер редактора как есть: тот же цикл, что в `tick()` index.html, и тот же
 // `src/collision.js`. Нужен для сравнения «сейчас» с альтернативами на одной сцене.
 import {CELL, createChains} from '../lab.js';
-import {buildPinSpatialIndex, collectSegmentCandidates, resolveWirePinCollisions} from '../../src/collision.js';
+import {buildPinSpatialIndex, prepareRopeContacts, resolveRopeContacts, settleRopeContacts, tetherRope} from '../../src/collision.js';
 
 export function createCurrentSolver() {
   return {
@@ -53,10 +53,9 @@ export function createCurrentSolver() {
       const index = this.buildIndex(lab);
       const gravityX = lab.gravity.x * dt * dt;
       const gravityY = lab.gravity.y * dt * dt;
-      const clearance = CELL * 1.06;
-      const slop = CELL * 0.04;
+      const clearance = CELL;
       const collisions = lab.params.collisions !== false;
-      const damping = collisions ? 0.78 : 0.94;
+      const damping = 0.94;
 
       this.wires.forEach((wire, w) => {
         const p = wire.points;
@@ -84,9 +83,9 @@ export function createCurrentSolver() {
           q.y += vy + gravityY;
         }
         const id = 'w' + w;
-        let candidates = collisions ? collectSegmentCandidates(index, p, clearance + CELL, id) : null;
         const ghosts = lab.ghostPins?.[w];
-        if (candidates && ghosts?.size) candidates = candidates.map(list => list.filter(pin => !ghosts.has(this.pinOfOrder[pin.order])));
+        if (collisions) prepareRopeContacts(wire, id, pinned, index, clearance, {exclude: ghosts?.size ? pin => ghosts.has(this.pinOfOrder[pin.order]) : null});
+        else wire.contact = null;
         for (let n = 0; n < 10; n++) {
           p[0].x = ax;
           p[0].y = ay;
@@ -117,18 +116,13 @@ export function createCurrentSolver() {
               b.y -= dy * diff * 0.5;
             }
           }
-          if (collisions) {
-            resolveWirePinCollisions(id, p, pinned, index, clearance, {
-              correction: 0.35, maxPush: CELL * 0.5, candidates, response: 'position', slop
-            });
-          }
+          // натяжение от концов, как в редакторе: до первого пина, которого жгут касается
+          tetherRope(wire, pinned, ax, ay, ex, ey);
+          if (collisions) resolveRopeContacts(wire, pinned, clearance, {maxMove: CELL * 0.5});
         }
         if (collisions) {
-          for (let n = 0; n < 2; n++) {
-            resolveWirePinCollisions(id, p, pinned, index, clearance, {
-              correction: 0.65, maxPush: CELL * 0.35, candidates, slop
-            });
-          }
+          for (let n = 0; n < 2; n++) resolveRopeContacts(wire, pinned, clearance, {final: true, maxMove: CELL * 0.5});
+          settleRopeContacts(wire, 0.3);
         }
         if (pinned) {
           p[last].x = p[last].ox = ex;
