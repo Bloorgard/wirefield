@@ -333,7 +333,7 @@ async function main() {
       await reset();
       const nativeZoom = await evaluate(`(async()=>{const scene=document.querySelector('#scene'),r=scene.getBoundingClientRect(),before=Number(document.querySelector('#zoom').value);scene.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-120,clientX:r.width/2,clientY:r.height/2}));await new Promise(resolve=>setTimeout(resolve,40));return {before,after:Number(document.querySelector('#zoom').value),min:document.querySelector('#zoom').min,fileMenu:document.querySelectorAll('#panel-file button').length===5,legacyActions:document.querySelectorAll('.top-actions > button:not(.menu-toggle)').length,gravityButton:Boolean(document.querySelector('#gravityToggle')),layerIcons:document.querySelectorAll('.item.primary .layer-tools .icon').length,lengthIcons:document.querySelectorAll('.item.primary .length-control .icon').length}})()`);
       assert(nativeZoom.after > nativeZoom.before, 'Ctrl+wheel did not zoom in');
-      assert(nativeZoom.min === '30', `zoom minimum is ${nativeZoom.min}`);
+      assert(nativeZoom.min === '20', `zoom minimum is ${nativeZoom.min}`);
       assert(nativeZoom.fileMenu && nativeZoom.legacyActions === 0, 'file actions were not merged into one menu');
       assert(nativeZoom.gravityButton, 'gravity toggle is missing');
       assert(nativeZoom.layerIcons === 6, `expected 6 layer icons, got ${nativeZoom.layerIcons}`);
