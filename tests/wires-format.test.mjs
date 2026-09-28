@@ -40,3 +40,21 @@ test('parseWires enforces object and byte limits', () => {
   assert.throws(() => parseWires(`${rows.join('\n')}\n`), /не более 1000/);
   assert.throws(() => parseWires(`wires 1\n#${'x'.repeat(MAX_FILE_BYTES)}\n`), /1 МБ/);
 });
+
+test('serializeWires writes wire shapes as wires 2 and parseWires reads them back', () => {
+  const shapes = {B: [4, 5, 5.25, 7.5, 8, 9]};
+  const text = serializeWires(state, shapes);
+  assert.match(text, /^wires 2\n/);
+  assert.match(text, /\nwire B x 4 y 5 length 6 color #102cff end 8 9\nshape 4 5 5.25 7.5 8 9\n/);
+  assert.deepEqual(parseWires(text), {...state, shapes});
+  assert.match(serializeWires(state, {}), /^wires 1\n/);
+});
+
+test('parseWires rejects misplaced or malformed shapes', () => {
+  const head = 'wires 2\nwire A x 1 y 2 length 3 color #102cff\n';
+  assert.throws(() => parseWires('wires 2\nshape 1 2 3 4\n'), /сразу после/);
+  assert.throws(() => parseWires(`${head}# comment\ngrid visible\nshape 1 2 3 4\n`), /сразу после/);
+  assert.throws(() => parseWires(`${head}shape 1 2 3\n`), /пар координат/);
+  assert.throws(() => parseWires(`${head}shape ${Array(130).fill(1).join(' ')}\n`), /пар координат/);
+  assert.throws(() => parseWires(`${head}shape 1 2 x 4\n`), /числами/);
+});
