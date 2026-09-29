@@ -388,6 +388,15 @@ async function main() {
     try {
       await setViewport(1280, 800, false);
       await reset();
+      const clip = await evaluate(`(async()=>{const copy=()=>{const dt=new DataTransfer();document.dispatchEvent(new ClipboardEvent('copy',{clipboardData:dt,bubbles:true,cancelable:true}));return dt.getData('text/plain')},paste=text=>{const dt=new DataTransfer();dt.setData('text/plain',text);document.body.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}))},count=()=>document.querySelectorAll('.wire-group').length,before=count(),text=copy();paste(text);await new Promise(r=>setTimeout(r,120));const pasted=count(),title=document.querySelector('#compactLayerTitle')?.textContent||'';paste('hello');await new Promise(r=>setTimeout(r,60));return {before,pasted,afterJunk:count(),header:text.split('\\n')[0],wireLines:text.split('\\n').filter(l=>l.startsWith('wire ')).length,shapeLines:text.split('\\n').filter(l=>l.startsWith('shape ')).length,title}})()`);
+      assert(clip.header === 'wires 2' && clip.wireLines >= 1 && clip.shapeLines === clip.wireLines, `copy did not produce .wires with shapes: ${JSON.stringify(clip)}`);
+      assert(clip.pasted === clip.before + clip.wireLines && clip.afterJunk === clip.pasted, `paste did not add exactly the copied wires: ${JSON.stringify(clip)}`);
+      pass('clipboard copy and paste', `${clip.wireLines} wire(s) copied with shape and pasted as new, junk ignored`);
+    } catch (error) { fail('clipboard copy and paste', error); }
+
+    try {
+      await setViewport(1280, 800, false);
+      await reset();
       const lengthGeometry = await evaluate(`(()=>{const row=document.querySelector('.item.primary .length-control'),item=row.closest('.item'),input=row.querySelector('input'),buttons=[...row.querySelectorAll('button')].map(button=>button.getBoundingClientRect().width),range=input.getBoundingClientRect(),rows=[item.querySelector('.item-main'),row,item.querySelector('.layer-swatches'),item.querySelector('.layer-tools')].map(element=>element.getBoundingClientRect().height),divider=row.querySelector('.length-divider').getBoundingClientRect(),style=getComputedStyle(input);input.value=input.min;const min=input.value;input.value=input.max;const max=input.value;return {min,max,padding:[style.paddingLeft,style.paddingRight],backgroundSize:style.backgroundSize,backgroundRepeat:style.backgroundRepeat,divider:[style.borderRightWidth,getComputedStyle(row.querySelector('.length-up')).borderLeftWidth,divider.width,divider.height],buttons,rangeWidth:range.width,rows}})()`);
       assert(lengthGeometry.min === '0', `length slider min is ${lengthGeometry.min}`);
       assert(lengthGeometry.max === '48', `length slider max is ${lengthGeometry.max}`);
